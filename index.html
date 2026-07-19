@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#8b4a32" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="媽媽記帳" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>媽媽安心記帳</title>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>媽媽安心記帳</h1>
+      <p id="storage-status">資料只存在這台手機</p>
+    </div>
+    <button class="small secondary" id="install-button" hidden>安裝</button>
+  </header>
+
+  <nav aria-label="主要功能">
+    <button class="nav-button active" data-view="entry">記帳</button>
+    <button class="nav-button" data-view="import">帳單</button>
+    <button class="nav-button" data-view="report">月報</button>
+    <button class="nav-button" data-view="backup">備份</button>
+  </nav>
+
+  <main>
+    <section class="view active" id="view-entry">
+      <h2>今天花多少錢？</h2>
+      <label for="amount">金額</label>
+      <div class="money-field"><span>$</span><input id="amount" inputmode="decimal" placeholder="700" aria-label="金額" /></div>
+
+      <label for="note">花在哪裡？</label>
+      <input id="note" class="text-input" placeholder="例如：市場買菜" />
+
+      <fieldset>
+        <legend>分類</legend>
+        <div class="chips" id="category-list"></div>
+      </fieldset>
+
+      <button class="record" id="record-button">● 錄下原始語音</button>
+      <p class="message success" id="audio-message" hidden>語音已暫存，確認月報7天後才刪除</p>
+      <button class="primary" id="save-entry">確認記下這一筆</button>
+      <p class="hint">語音先保存原音；金額與分類由媽媽確認，避免國台語辨識錯誤。</p>
+
+      <div class="recent">
+        <h2>最近帳目</h2>
+        <div id="recent-entries" class="empty">還沒有帳目</div>
+      </div>
+    </section>
+
+    <section class="view" id="view-import">
+      <div class="card">
+        <h2>匯入電子帳單</h2>
+        <p>支援中信、台新、國泰、富邦、彰銀與郵局的版型辨識規則。</p>
+        <label class="file-button" for="statement-file">選擇帳單截圖或CSV</label>
+        <input id="statement-file" type="file" accept="image/*,.csv,text/csv" hidden />
+        <div id="import-preview" class="empty">選擇檔案後，會先預覽再決定是否匯入。</div>
+      </div>
+      <div class="notice"><strong>隱私：</strong>免費版不登入信箱。請從Mail下載附件或截圖，再自行選取。</div>
+    </section>
+
+    <section class="view" id="view-report">
+      <div class="card report-card">
+        <p id="report-month"></p>
+        <h2>本月支出</h2>
+        <div class="report-total" id="report-total">$0</div>
+        <div id="report-rows"></div>
+      </div>
+      <button class="danger-outline" id="confirm-report">報表正確，7天後刪除原始音檔</button>
+      <button class="secondary" id="cancel-deletion" hidden>取消本月音檔刪除</button>
+      <p class="message" id="deletion-message"></p>
+    </section>
+
+    <section class="view" id="view-backup">
+      <div class="card">
+        <h2>加密備份</h2>
+        <p>備份檔會先在手機內用密碼加密，再由你存入iCloud Drive或其他位置。</p>
+        <label for="backup-password">備份密碼</label>
+        <input id="backup-password" class="text-input" type="password" autocomplete="new-password" placeholder="至少8個字元" />
+        <button class="primary" id="export-backup">產生加密備份檔</button>
+        <label class="file-button secondary-file" for="restore-file">選擇加密備份檔來復原</label>
+        <input id="restore-file" type="file" accept="application/json,.mabackup" hidden />
+        <p class="message" id="backup-message"></p>
+      </div>
+      <div class="notice warning"><strong>請記住密碼：</strong>忘記後無法解密，系統也不能替你找回。</div>
+    </section>
+  </main>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h2 id="dialog-title">確認</h2>
+      <p id="dialog-text"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="secondary">取消</button>
+        <button value="confirm" class="primary" id="dialog-confirm">確認</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
