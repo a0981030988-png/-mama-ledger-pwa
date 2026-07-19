@@ -27,8 +27,14 @@ async function audioDelete(id) { const db=await openAudioDb(); return new Promis
 
 function safeParse(value, fallback) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }
 function persist() { localStorage.setItem(STORE_KEY, JSON.stringify(entries)); localStorage.setItem(META_KEY, JSON.stringify(meta)); }
-function isoDay() { return new Date().toISOString().slice(0, 10); }
-function monthKey() { return new Date().toISOString().slice(0, 7); }
+function localDateParts(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return { day: `${year}-${month}-${day}`, month: `${year}-${month}` };
+}
+function isoDay() { return localDateParts().day; }
+function monthKey() { return localDateParts().month; }
 function money(value) { return `$${Number(value || 0).toLocaleString('zh-TW')}`; }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 
@@ -179,7 +185,7 @@ async function exportBackup() {
   const payload=new TextEncoder().encode(JSON.stringify({version:2,createdAt:new Date().toISOString(),entries,audio}));
   const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,payload);
   const pack={format:'mama-ledger-backup',salt:b64(salt),iv:b64(iv),data:b64(new Uint8Array(encrypted))};
-  const blob=new Blob([JSON.stringify(pack)],{type:'application/json'}), url=URL.createObjectURL(blob), a=document.createElement('a');
+  const blob=new Blob([JSON.stringify(pack)],{type:'application/octet-stream'}), url=URL.createObjectURL(blob), a=document.createElement('a');
   a.href=url; a.download=`媽媽記帳備份-${isoDay()}.mabackup`; a.click(); URL.revokeObjectURL(url);
   meta.lastBackupAt=new Date().toISOString(); persist(); showBackup('加密備份已產生。請在下載選單中選擇「儲存到檔案」→ iCloud Drive。'); updateStorageStatus();
 }
