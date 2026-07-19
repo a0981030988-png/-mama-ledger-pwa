@@ -12,7 +12,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", sans-serif; font-size: 18px; }
-button, input { font: inherit; }
+button, input, textarea { font: inherit; }
 button { cursor: pointer; touch-action: manipulation; }
 header { display: flex; justify-content: space-between; align-items: center; padding: calc(18px + env(safe-area-inset-top)) 20px 14px; max-width: 720px; margin: auto; }
 h1 { margin: 0; font-size: 30px; line-height: 1.15; }
@@ -38,6 +38,10 @@ fieldset { margin: 14px 0 0; padding: 0; border: 0; }
 .secondary { border: 2px solid #9d806e; background: transparent; color: var(--ink); }
 .record { border: 0; background: var(--green); color: white; }
 .record.recording { background: var(--red); }
+.audio-preview { margin-top: 14px; padding: 14px; border: 2px solid #b8d8c6; border-radius: 16px; background: #edf8f1; }
+.audio-preview audio { display: block; width: 100%; margin-top: 10px; }
+.transcript { resize: vertical; line-height: 1.5; }
+.play-audio { min-height: 42px; margin-top: 8px; padding: 8px 14px; border: 0; border-radius: 12px; background: var(--green); color: white; font-weight: 800; }
 .danger-outline { border: 2px solid var(--red); background: transparent; color: var(--red); }
 .small { width: auto; min-height: 44px; margin: 0; padding: 8px 14px; }
 .card { margin-top: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 8px 24px rgba(74, 45, 28, .06); }

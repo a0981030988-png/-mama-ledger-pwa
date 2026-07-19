@@ -44,6 +44,13 @@
 
       <button class="record" id="record-button">● 錄下原始語音</button>
       <p class="message success" id="audio-message" hidden>語音已暫存，確認月報7天後才刪除</p>
+      <div class="audio-preview" id="audio-preview" hidden>
+        <strong>先重聽這次錄音</strong>
+        <audio id="pending-audio-player" controls playsinline></audio>
+      </div>
+      <label for="transcript">語音逐字稿（可以自己修改）</label>
+      <textarea id="transcript" class="text-input transcript" rows="3" placeholder="錄音後會嘗試顯示；若手機不支援，可直接手動輸入。"></textarea>
+      <p class="hint" id="speech-status">國語辨識為輔助功能；台語腔調可能需要手動修正。</p>
       <button class="primary" id="save-entry">確認記下這一筆</button>
       <p class="hint">語音先保存原音；金額與分類由媽媽確認，避免國台語辨識錯誤。</p>
 

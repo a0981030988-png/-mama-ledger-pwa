@@ -7,6 +7,10 @@ let category = '買菜';
 let recorder;
 let audioChunks = [];
 let pendingAudio;
+let pendingAudioUrl;
+let speechRecognition;
+let finalTranscript = '';
+let activeAudio;
 let deferredInstall;
 
 function openAudioDb() {
@@ -43,7 +47,60 @@ function renderRecent() {
   if (!entries.length) { target.className = 'empty'; target.textContent = '還沒有帳目'; return; }
   target.className = '';
   target.innerHTML = entries.slice().sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8).map(entry => `
-    <div class="entry-row"><div>${escapeHtml(entry.note)}<small>${entry.occurredAt}・${entry.category}${entry.audio ? '・有原音' : ''}</small></div><strong>${money(entry.amount)}</strong></div>`).join('');
+    <div class="entry-row"><div>${escapeHtml(entry.note)}<small>${entry.occurredAt}・${entry.category}${entry.audio ? '・有原音' : ''}</small>${entry.transcript ? `<small>逐字稿：${escapeHtml(entry.transcript)}</small>` : ''}${entry.audioId ? `<button class="play-audio" data-audio-id="${entry.audioId}">▶ 重聽原音</button>` : ''}</div><strong>${money(entry.amount)}</strong></div>`).join('');
+}
+
+function startSpeechRecognition() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const status = document.querySelector('#speech-status');
+  finalTranscript = '';
+  document.querySelector('#transcript').value = '';
+  if (!Recognition) {
+    status.textContent = '這台手機瀏覽器不支援自動逐字稿；原音仍會保存，可手動輸入文字。';
+    return;
+  }
+  try {
+    speechRecognition = new Recognition();
+    speechRecognition.lang = 'zh-TW';
+    speechRecognition.continuous = true;
+    speechRecognition.interimResults = true;
+    speechRecognition.onresult = event => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const text = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += `${text} `;
+        else interim += text;
+      }
+      document.querySelector('#transcript').value = `${finalTranscript}${interim}`.trim();
+      status.textContent = '正在產生國語逐字稿；台語或口音請在錄完後修正。';
+    };
+    speechRecognition.onerror = () => { status.textContent = '這次未能產生逐字稿；原音已照常保存，可手動輸入文字。'; };
+    speechRecognition.start();
+  } catch { status.textContent = '無法啟動自動逐字稿；原音仍會保存。'; }
+}
+
+function stopSpeechRecognition() {
+  try { speechRecognition?.stop(); } catch {}
+  speechRecognition = null;
+}
+
+function showPendingAudio(blob) {
+  if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl);
+  pendingAudioUrl = URL.createObjectURL(blob);
+  document.querySelector('#pending-audio-player').src = pendingAudioUrl;
+  document.querySelector('#audio-preview').hidden = false;
+}
+
+async function playSavedAudio(audioId, button) {
+  const blob = await audioGet(audioId);
+  if (!blob) { alert('這段原音已刪除或不存在。'); return; }
+  if (activeAudio) { activeAudio.pause(); URL.revokeObjectURL(activeAudio.src); }
+  const url = URL.createObjectURL(blob);
+  activeAudio = new Audio(url);
+  button.textContent = '■ 停止播放';
+  activeAudio.onended = () => { button.textContent = '▶ 重聽原音'; URL.revokeObjectURL(url); activeAudio = null; };
+  activeAudio.onerror = () => { button.textContent = '▶ 重聽原音'; URL.revokeObjectURL(url); activeAudio = null; alert('無法播放這段原音。'); };
+  await activeAudio.play();
 }
 
 function renderReport() {
@@ -60,7 +117,7 @@ function renderReport() {
 
 async function startOrStopRecording() {
   const button = document.querySelector('#record-button');
-  if (recorder?.state === 'recording') { recorder.stop(); return; }
+  if (recorder?.state === 'recording') { stopSpeechRecognition(); recorder.stop(); return; }
   if (!navigator.mediaDevices?.getUserMedia) { alert('這個瀏覽器不支援錄音。請使用Safari開啟。'); return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -72,21 +129,26 @@ async function startOrStopRecording() {
       stream.getTracks().forEach(track => track.stop());
       button.textContent = '● 重新錄音'; button.classList.remove('recording');
       document.querySelector('#audio-message').hidden = false;
+      showPendingAudio(pendingAudio);
     };
-    recorder.start(); button.textContent = '■ 停止錄音'; button.classList.add('recording');
+    recorder.start(); startSpeechRecognition(); button.textContent = '■ 停止錄音'; button.classList.add('recording');
   } catch { alert('無法使用麥克風，請檢查Safari權限。'); }
 }
 
 async function saveEntry() {
   const amount = Number(document.querySelector('#amount').value);
   const note = document.querySelector('#note').value.trim() || category;
+  const transcript = document.querySelector('#transcript').value.trim();
   if (!Number.isFinite(amount) || amount <= 0) { alert('請輸入正確金額。'); return; }
   const id=crypto.randomUUID(), audioId=pendingAudio?`audio-${id}`:null;
   if (pendingAudio) await audioPut(audioId,pendingAudio);
-  entries.unshift({ id, occurredAt: isoDay(), amount, note, category, transactionKind: 'expense', audio: Boolean(pendingAudio), audioId, createdAt: new Date().toISOString() });
+  entries.unshift({ id, occurredAt: isoDay(), amount, note, category, transcript, transactionKind: 'expense', audio: Boolean(pendingAudio), audioId, createdAt: new Date().toISOString() });
   persist(); pendingAudio = null;
-  document.querySelector('#amount').value = ''; document.querySelector('#note').value = '';
+  document.querySelector('#amount').value = ''; document.querySelector('#note').value = ''; document.querySelector('#transcript').value = '';
   document.querySelector('#audio-message').hidden = true; document.querySelector('#record-button').textContent = '● 錄下原始語音';
+  document.querySelector('#audio-preview').hidden = true; document.querySelector('#pending-audio-player').removeAttribute('src');
+  if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl); pendingAudioUrl = null;
+  document.querySelector('#speech-status').textContent = '國語辨識為輔助功能；台語腔調可能需要手動修正。';
   renderRecent(); alert(`已記下：${note} ${money(amount)}`);
 }
 
@@ -146,6 +208,11 @@ function updateStorageStatus(){document.querySelector('#storage-status').textCon
 document.addEventListener('click', event => {
   const nav=event.target.closest('[data-view]'); if(nav) switchView(nav.dataset.view);
   const chip=event.target.closest('[data-category]'); if(chip){category=chip.dataset.category;renderCategories();}
+  const play=event.target.closest('[data-audio-id]');
+  if(play){
+    if(activeAudio && play.textContent.includes('停止')) { activeAudio.pause(); URL.revokeObjectURL(activeAudio.src); activeAudio=null; play.textContent='▶ 重聽原音'; }
+    else playSavedAudio(play.dataset.audioId,play).catch(()=>alert('無法播放這段原音。'));
+  }
 });
 document.querySelector('#record-button').addEventListener('click', startOrStopRecording);
 document.querySelector('#save-entry').addEventListener('click', saveEntry);
