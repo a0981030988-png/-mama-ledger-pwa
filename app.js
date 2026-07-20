@@ -11,6 +11,7 @@ let pendingAudioUrl;
 let speechRecognition;
 let finalTranscript = '';
 let activeAudio;
+let assistantTimer;
 let deferredInstall;
 
 function openAudioDb() {
@@ -90,11 +91,78 @@ function stopSpeechRecognition() {
   speechRecognition = null;
 }
 
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'zh-TW';
+  utterance.rate = 0.9;
+  speechSynthesis.speak(utterance);
+}
+
+function inferCategory(text) {
+  const rules = [
+    ['餐飲', /早餐|午餐|晚餐|便當|外送|餐廳|咖啡|飲料|吃|飯|麵|Uber\s*Eats|foodpanda/i],
+    ['買菜', /市場|買菜|蔬菜|水果|肉|魚|全聯|家樂福/i],
+    ['交通', /計程車|車資|捷運|公車|火車|高鐵|加油|停車|Uber/i],
+    ['醫療', /醫院|診所|看醫生|藥局|藥品|掛號/i],
+    ['水電', /水費|電費|瓦斯|電話費|網路費/i],
+    ['日用品', /日用品|衛生紙|洗衣|清潔|生活用品/i]
+  ];
+  return rules.find(([, pattern]) => pattern.test(text))?.[0] || null;
+}
+
+function analyzeAndConfirmSpeech() {
+  const text = document.querySelector('#transcript').value.trim();
+  const status = document.querySelector('#speech-status');
+  if (!text) {
+    status.textContent = '沒有取得逐字稿。請重錄，或直接輸入金額與用途。';
+    speak('我沒有聽清楚。請問花了多少錢？');
+    return;
+  }
+  const numbers = [...text.matchAll(/(?:\$|＄)?\s*(\d[\d,]*(?:\.\d{1,2})?)/g)]
+    .map(match => Number(match[1].replaceAll(',', '')))
+    .filter(number => Number.isFinite(number) && number > 0);
+  const uniqueNumbers = [...new Set(numbers)];
+  const inferred = inferCategory(text);
+  if (inferred) { category = inferred; renderCategories(); }
+  if (uniqueNumbers.length === 1) document.querySelector('#amount').value = uniqueNumbers[0];
+  if (!document.querySelector('#note').value.trim()) {
+    const cleaned = text.replace(/(?:\$|＄)?\s*\d[\d,]*(?:\.\d{1,2})?/g, '').replace(/元/g, '').trim();
+    if (cleaned) document.querySelector('#note').value = cleaned;
+  }
+  if (uniqueNumbers.length === 0) {
+    status.textContent = '智慧追問：沒有聽到金額，請說明或輸入花多少錢。';
+    speak('我沒有聽到金額。請問花了多少錢？');
+  } else if (uniqueNumbers.length > 1) {
+    status.textContent = `智慧追問：聽到多個數字（${uniqueNumbers.join('、')}），請確認哪一個是金額。`;
+    speak(`我聽到${uniqueNumbers.join('和')}，哪一個才是金額？請在金額欄確認。`);
+  } else {
+    const selectedCategory = inferred || category;
+    status.textContent = `智慧確認：${uniqueNumbers[0]}元・${selectedCategory}。請確認後再記下。`;
+    speak(`我聽到${uniqueNumbers[0]}元，分類${selectedCategory}。請確認對不對。`);
+  }
+}
+
 function showPendingAudio(blob) {
   if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl);
   pendingAudioUrl = URL.createObjectURL(blob);
   document.querySelector('#pending-audio-player').src = pendingAudioUrl;
+  document.querySelector('#pending-audio-player').load();
   document.querySelector('#audio-preview').hidden = false;
+}
+
+async function playPendingAudio() {
+  const player = document.querySelector('#pending-audio-player');
+  const button = document.querySelector('#play-pending');
+  if (!pendingAudio || !player.src) return;
+  window.speechSynthesis?.cancel();
+  if (!player.paused) { player.pause(); button.textContent = '▶ 立即重聽'; return; }
+  player.currentTime = 0;
+  player.volume = 1;
+  button.textContent = '■ 停止播放';
+  player.onended = () => { button.textContent = '▶ 再聽一次'; };
+  try { await player.play(); } catch { button.textContent = '▶ 再試一次'; alert('iPhone尚未準備好音訊，請再按一次。'); }
 }
 
 async function playSavedAudio(audioId, button) {
@@ -133,9 +201,12 @@ async function startOrStopRecording() {
     recorder.onstop = () => {
       pendingAudio = new Blob(audioChunks, { type: recorder.mimeType || 'audio/mp4' });
       stream.getTracks().forEach(track => track.stop());
+      recorder = null;
       button.textContent = '● 重新錄音'; button.classList.remove('recording');
       document.querySelector('#audio-message').hidden = false;
-      showPendingAudio(pendingAudio);
+      window.setTimeout(() => showPendingAudio(pendingAudio), 250);
+      window.clearTimeout(assistantTimer);
+      assistantTimer = window.setTimeout(analyzeAndConfirmSpeech, 900);
     };
     recorder.start(); startSpeechRecognition(); button.textContent = '■ 停止錄音'; button.classList.add('recording');
   } catch { alert('無法使用麥克風，請檢查Safari權限。'); }
@@ -221,6 +292,8 @@ document.addEventListener('click', event => {
   }
 });
 document.querySelector('#record-button').addEventListener('click', startOrStopRecording);
+document.querySelector('#play-pending').addEventListener('click', playPendingAudio);
+document.querySelector('#smart-review').addEventListener('click', analyzeAndConfirmSpeech);
 document.querySelector('#save-entry').addEventListener('click', saveEntry);
 document.querySelector('#confirm-report').addEventListener('click', () => confirm('確認報表正確，並排定7天後刪除原始音檔？') && scheduleDeletion());
 document.querySelector('#cancel-deletion').addEventListener('click', cancelDeletion);
