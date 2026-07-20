@@ -393,6 +393,10 @@ async function processStatementFile(file) {
       text = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf') ? await extractPdfText(file) : await extractImageText(file);
       pendingImports = parseCtbcText(text);
     }
+    const localCtbcAccount = paymentAccounts.find(name => /中信.*金融卡/.test(name)) || paymentAccounts.find(name => name.includes('中信'));
+    if (localCtbcAccount && !/csv/i.test(file.type) && !file.name.toLowerCase().endsWith('.csv')) {
+      pendingImports = pendingImports.map(item => ({ ...item, paymentAccount: localCtbcAccount }));
+    }
     status.textContent = `辨識完成：找到 ${pendingImports.length} 筆。請逐筆勾選後確認。`;
     renderImportPreview();
   } catch (error) {
