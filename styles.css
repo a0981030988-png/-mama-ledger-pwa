@@ -9,6 +9,9 @@
   --green: #276749;
   --red: #b42318;
   --soft: #f2e6d8;
+  --pink: #f6d8dd;
+  --yellow: #fff0ad;
+  --lavender: #e9e1f4;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", sans-serif; font-size: 18px; }
@@ -18,7 +21,7 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 h1 { margin: 0; font-size: 30px; line-height: 1.15; }
 h2 { margin: 10px 0 14px; font-size: 24px; }
 header p, .hint { margin: 5px 0 0; color: var(--muted); font-size: 15px; }
-nav { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; max-width: 720px; margin: auto; padding: 8px 12px; background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(12px); }
+nav { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; max-width: 720px; margin: auto; padding: 8px 12px; background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(12px); }
 .nav-button { min-height: 52px; border: 0; border-radius: 14px; background: var(--soft); color: #5a4337; font-weight: 800; }
 .nav-button.active { background: var(--brand); color: white; }
 main { max-width: 720px; margin: auto; padding: 8px 20px calc(50px + env(safe-area-inset-bottom)); }
@@ -68,9 +71,45 @@ fieldset { margin: 14px 0 0; padding: 0; border: 0; }
 .report-total { margin: 6px 0 14px; color: var(--brand); font-size: 42px; font-weight: 900; }
 .message { min-height: 24px; line-height: 1.5; }
 .success { color: var(--green); font-weight: 800; }
+.planner-hero { display: flex; align-items: center; gap: 14px; margin: 10px 0 14px; padding: 18px; border: 2px solid #ead3a0; border-radius: 22px; background: linear-gradient(135deg, #fff7c9, #fbe3e8 55%, #e8f5ed); box-shadow: 0 8px 22px rgba(120, 83, 45, .08); }
+.planner-hero h2 { margin: 0 0 5px; }
+.planner-hero p { margin: 0; color: var(--muted); line-height: 1.45; }
+.planner-flower { display: grid; place-items: center; width: 64px; height: 64px; flex: 0 0 64px; border-radius: 50%; background: rgba(255,255,255,.72); font-size: 38px; }
+.calendar-card { padding: 16px 12px 18px; }
+.calendar-toolbar { display: grid; grid-template-columns: 52px 1fr 52px; gap: 8px; align-items: center; }
+.calendar-toolbar h2 { margin: 0; text-align: center; }
+.calendar-arrow { min-height: 48px; border: 0; border-radius: 50%; background: var(--soft); color: var(--brand); font-size: 36px; font-weight: 900; line-height: 1; }
+.calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.calendar-weekdays { margin: 16px 0 7px; color: var(--muted); text-align: center; font-size: 15px; font-weight: 800; }
+.calendar-weekdays span:first-child { color: var(--red); }
+.calendar-weekdays span:last-child { color: #365b91; }
+.calendar-day { position: relative; min-width: 0; min-height: 50px; padding: 5px 2px 13px; border: 1px solid transparent; border-radius: 14px; background: #fffaf5; color: var(--ink); font-weight: 800; }
+.calendar-day.blank { visibility: hidden; }
+.calendar-day.today { border-color: #d9ae45; background: var(--yellow); }
+.calendar-day.selected { background: var(--brand); color: white; box-shadow: 0 4px 10px rgba(139,74,50,.22); }
+.calendar-day.has-items::after { content: ""; position: absolute; bottom: 6px; left: 50%; width: 7px; height: 7px; border-radius: 50%; background: #df7081; transform: translateX(-50%); }
+.calendar-day.selected.has-items::after { background: #fff1a8; }
+.calendar-count { position: absolute; top: -5px; right: -4px; display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 10px; background: var(--green); color: white; font-size: 11px; }
+.selected-date-label { margin: 14px 4px 0; color: var(--brand); text-align: center; font-weight: 900; }
+.planner-kind-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.planner-kind { min-height: 54px; padding: 10px; border: 2px solid var(--line); border-radius: 16px; background: white; color: var(--ink); font-weight: 900; }
+.planner-kind[data-planner-kind="shopping"] { background: #fff9df; }
+.planner-kind.active { border-color: var(--green); background: #e7f5ed; color: var(--green); }
+.planner-save { background: var(--green); }
+.planner-list { margin-top: 4px; }
+.planner-item { display: grid; grid-template-columns: 46px 1fr 44px; gap: 9px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.planner-item:last-child { border-bottom: 0; }
+.planner-check, .planner-delete { min-height: 42px; border: 0; border-radius: 12px; font-weight: 900; }
+.planner-check { background: #e7f5ed; color: var(--green); font-size: 23px; }
+.planner-delete { background: #f9e1de; color: var(--red); font-size: 18px; }
+.planner-item.done .planner-text { color: var(--muted); text-decoration: line-through; }
+.planner-text strong { display: block; overflow-wrap: anywhere; }
+.planner-text small { display: block; margin-top: 3px; color: var(--muted); }
+.planner-badge { display: inline-block; margin-top: 5px; padding: 3px 8px; border-radius: 10px; background: var(--lavender); color: #634879; font-size: 13px; font-weight: 800; }
+.shopping-card { background: linear-gradient(180deg, white, #fffaf0); }
 dialog { width: min(90vw, 480px); padding: 22px; border: 0; border-radius: 20px; color: var(--ink); }
 dialog::backdrop { background: rgba(30, 20, 14, .55); }
 .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .dialog-actions button { margin-top: 8px; }
-@media (max-width: 390px) { body { font-size: 16px; } .nav-button { font-size: 15px; } main { padding-inline: 14px; } }
+@media (max-width: 390px) { body { font-size: 16px; } .nav-button { min-height: 48px; padding-inline: 3px; font-size: 14px; } nav { gap: 4px; padding-inline: 8px; } main { padding-inline: 14px; } .calendar-grid, .calendar-weekdays { gap: 3px; } .calendar-day { min-height: 46px; border-radius: 12px; } }
 @media (display-mode: standalone) { #install-button { display: none !important; } }
