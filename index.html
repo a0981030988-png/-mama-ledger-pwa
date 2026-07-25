@@ -25,6 +25,7 @@
     <button class="nav-button active" data-view="entry">記帳</button>
     <button class="nav-button" data-view="import">帳單</button>
     <button class="nav-button" data-view="report">月報</button>
+    <button class="nav-button" data-view="planner">生活</button>
     <button class="nav-button" data-view="backup">備份</button>
   </nav>
 
@@ -90,6 +91,51 @@
       <button class="danger-outline" id="confirm-report">報表正確，7天後刪除原始音檔</button>
       <button class="secondary" id="cancel-deletion" hidden>取消本月音檔刪除</button>
       <p class="message" id="deletion-message"></p>
+    </section>
+
+    <section class="view" id="view-planner">
+      <div class="planner-hero">
+        <div class="planner-flower" aria-hidden="true">🌼</div>
+        <div>
+          <h2>媽媽生活小日曆</h2>
+          <p>記得要做的事，也別忘了要買的東西。</p>
+        </div>
+      </div>
+
+      <div class="card calendar-card">
+        <div class="calendar-toolbar">
+          <button class="calendar-arrow" id="calendar-prev" type="button" aria-label="上一個月">‹</button>
+          <h2 id="calendar-month">本月</h2>
+          <button class="calendar-arrow" id="calendar-next" type="button" aria-label="下一個月">›</button>
+        </div>
+        <div class="calendar-weekdays" aria-hidden="true">
+          <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        </div>
+        <div class="calendar-grid" id="calendar-grid" aria-label="月份日期"></div>
+        <p class="selected-date-label" id="selected-date-label"></p>
+      </div>
+
+      <div class="card planner-add-card">
+        <h2>新增生活事項</h2>
+        <div class="planner-kind-switch" role="group" aria-label="事項種類">
+          <button class="planner-kind active" data-planner-kind="todo" type="button">✓ 待辦事項</button>
+          <button class="planner-kind" data-planner-kind="shopping" type="button">🛒 要買用品</button>
+        </div>
+        <label for="planner-title">要記什麼？</label>
+        <input id="planner-title" class="text-input" maxlength="80" placeholder="例如：回診、繳電費、買衛生紙" />
+        <button class="primary planner-save" id="planner-save" type="button">加到這一天</button>
+        <p class="message" id="planner-message"></p>
+      </div>
+
+      <div class="card">
+        <h2 id="day-list-title">這一天的事項</h2>
+        <div id="planner-day-list" class="empty">這一天還沒有安排</div>
+      </div>
+
+      <div class="card shopping-card">
+        <h2>🧺 尚未買的生活用品</h2>
+        <div id="shopping-open-list" class="empty">目前沒有待買用品</div>
+      </div>
     </section>
 
     <section class="view" id="view-backup">
