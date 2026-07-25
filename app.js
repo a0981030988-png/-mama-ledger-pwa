@@ -2,11 +2,18 @@ const CATEGORIES = ['買菜', '日用品', '醫療', '交通', '水電', '餐飲
 const ACCOUNT_KEY = 'mama-ledger.payment-accounts.v1';
 const STORE_KEY = 'mama-ledger.entries.v1';
 const META_KEY = 'mama-ledger.meta.v1';
+const PLANNER_KEY = 'mama-ledger.planner.v1';
 let entries = safeParse(localStorage.getItem(STORE_KEY), []);
 let meta = safeParse(localStorage.getItem(META_KEY), { lastBackupAt: null });
 let category = '買菜';
 let paymentAccounts = safeParse(localStorage.getItem(ACCOUNT_KEY), ['現金', '悠遊卡']);
 let paymentAccount = '現金';
+let plannerItems = safeParse(localStorage.getItem(PLANNER_KEY), []);
+if (!Array.isArray(plannerItems)) plannerItems = [];
+let plannerKind = 'todo';
+let selectedPlannerDate = isoDay();
+let plannerCursor = new Date();
+plannerCursor = new Date(plannerCursor.getFullYear(), plannerCursor.getMonth(), 1, 12);
 let recorder;
 let audioChunks = [];
 let pendingAudio;
@@ -32,6 +39,7 @@ async function audioDelete(id) { const db=await openAudioDb(); return new Promis
 
 function safeParse(value, fallback) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }
 function persist() { localStorage.setItem(STORE_KEY, JSON.stringify(entries)); localStorage.setItem(META_KEY, JSON.stringify(meta)); }
+function persistPlanner() { localStorage.setItem(PLANNER_KEY, JSON.stringify(plannerItems)); }
 function localDateParts(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -47,6 +55,146 @@ function switchView(name) {
   document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${name}`));
   document.querySelectorAll('.nav-button').forEach(el => el.classList.toggle('active', el.dataset.view === name));
   if (name === 'report') renderReport();
+  if (name === 'planner') renderPlanner();
+}
+
+function plannerDate(value) {
+  const [year, month, day] = String(value).split('-').map(Number);
+  return new Date(year, month - 1, day, 12);
+}
+
+function plannerDateLabel(value, includeYear = false) {
+  return new Intl.DateTimeFormat('zh-TW', {
+    ...(includeYear ? { year: 'numeric' } : {}),
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short'
+  }).format(plannerDate(value));
+}
+
+function plannerItemHtml(item, showDate = false) {
+  const kindLabel = item.kind === 'shopping' ? '要買用品' : '待辦事項';
+  const dateLabel = showDate ? `・${plannerDateLabel(item.date, true)}` : '';
+  return `
+    <div class="planner-item ${item.done ? 'done' : ''}">
+      <button class="planner-check" type="button" data-planner-toggle="${item.id}" aria-label="${item.done ? '改成尚未完成' : '標示完成'}">${item.done ? '✓' : '○'}</button>
+      <div class="planner-text">
+        <strong>${escapeHtml(item.title)}</strong>
+        <small><span class="planner-badge">${kindLabel}</span>${dateLabel}</small>
+      </div>
+      <button class="planner-delete" type="button" data-planner-delete="${item.id}" aria-label="刪除">×</button>
+    </div>`;
+}
+
+function renderCalendar() {
+  const year = plannerCursor.getFullYear();
+  const monthIndex = plannerCursor.getMonth();
+  const month = String(monthIndex + 1).padStart(2, '0');
+  const prefix = `${year}-${month}`;
+  const firstWeekday = new Date(year, monthIndex, 1, 12).getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0, 12).getDate();
+  const unfinishedCounts = new Map();
+
+  plannerItems.filter(item => item.date?.startsWith(prefix) && !item.done).forEach(item => {
+    unfinishedCounts.set(item.date, (unfinishedCounts.get(item.date) || 0) + 1);
+  });
+
+  const cells = Array.from({ length: firstWeekday }, () => '<span class="calendar-day blank" aria-hidden="true"></span>');
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = `${prefix}-${String(day).padStart(2, '0')}`;
+    const count = unfinishedCounts.get(date) || 0;
+    const classes = [
+      'calendar-day',
+      date === isoDay() ? 'today' : '',
+      date === selectedPlannerDate ? 'selected' : '',
+      count ? 'has-items' : ''
+    ].filter(Boolean).join(' ');
+    cells.push(`<button class="${classes}" type="button" data-calendar-date="${date}" aria-label="${plannerDateLabel(date, true)}${count ? `，${count}項尚未完成` : ''}">${day}${count ? `<span class="calendar-count">${count}</span>` : ''}</button>`);
+  }
+
+  document.querySelector('#calendar-month').textContent = `${year}年${monthIndex + 1}月`;
+  document.querySelector('#calendar-grid').innerHTML = cells.join('');
+}
+
+function renderPlanner() {
+  document.querySelectorAll('[data-planner-kind]').forEach(button => {
+    const active = button.dataset.plannerKind === plannerKind;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+
+  renderCalendar();
+  const selectedLabel = plannerDateLabel(selectedPlannerDate, true);
+  document.querySelector('#selected-date-label').textContent = `目前選擇：${selectedLabel}`;
+  document.querySelector('#day-list-title').textContent = `${selectedLabel}的事項`;
+
+  const dayItems = plannerItems
+    .filter(item => item.date === selectedPlannerDate)
+    .sort((a, b) => Number(a.done) - Number(b.done) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  const dayTarget = document.querySelector('#planner-day-list');
+  if (!dayItems.length) {
+    dayTarget.className = 'empty';
+    dayTarget.textContent = '這一天還沒有安排';
+  } else {
+    dayTarget.className = 'planner-list';
+    dayTarget.innerHTML = dayItems.map(item => plannerItemHtml(item)).join('');
+  }
+
+  const shoppingItems = plannerItems
+    .filter(item => item.kind === 'shopping' && !item.done)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  const shoppingTarget = document.querySelector('#shopping-open-list');
+  if (!shoppingItems.length) {
+    shoppingTarget.className = 'empty';
+    shoppingTarget.textContent = '目前沒有待買用品';
+  } else {
+    shoppingTarget.className = 'planner-list';
+    shoppingTarget.innerHTML = shoppingItems.map(item => plannerItemHtml(item, true)).join('');
+  }
+}
+
+function addPlannerItem() {
+  const input = document.querySelector('#planner-title');
+  const title = input.value.trim();
+  const message = document.querySelector('#planner-message');
+  if (!title) {
+    message.textContent = '請先輸入待辦事項或要買的用品。';
+    input.focus();
+    return;
+  }
+  plannerItems.push({
+    id: crypto.randomUUID(),
+    date: selectedPlannerDate,
+    title,
+    kind: plannerKind,
+    done: false,
+    createdAt: new Date().toISOString()
+  });
+  persistPlanner();
+  input.value = '';
+  message.textContent = `已加到${plannerDateLabel(selectedPlannerDate)}。`;
+  renderPlanner();
+}
+
+function togglePlannerItem(id) {
+  plannerItems = plannerItems.map(item => item.id === id ? { ...item, done: !item.done } : item);
+  persistPlanner();
+  renderPlanner();
+}
+
+function deletePlannerItem(id) {
+  const item = plannerItems.find(candidate => candidate.id === id);
+  if (!item || !confirm(`要刪除「${item.title}」嗎？`)) return;
+  plannerItems = plannerItems.filter(candidate => candidate.id !== id);
+  persistPlanner();
+  renderPlanner();
+}
+
+function changePlannerMonth(offset) {
+  plannerCursor = new Date(plannerCursor.getFullYear(), plannerCursor.getMonth() + offset, 1, 12);
+  selectedPlannerDate = localDateParts(plannerCursor).day;
+  document.querySelector('#planner-message').textContent = '';
+  renderPlanner();
 }
 
 function renderCategories() {
@@ -427,7 +575,7 @@ async function exportBackup() {
   const key=await deriveKey(password,salt,['encrypt']);
   const audio={};
   for(const entry of entries){if(entry.audioId){const blob=await audioGet(entry.audioId);if(blob)audio[entry.audioId]=await blobToDataUrl(blob);}}
-  const payload=new TextEncoder().encode(JSON.stringify({version:3,createdAt:new Date().toISOString(),entries,audio,paymentAccounts}));
+  const payload=new TextEncoder().encode(JSON.stringify({version:4,createdAt:new Date().toISOString(),entries,audio,paymentAccounts,plannerItems}));
   const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,payload);
   const pack={format:'mama-ledger-backup',salt:b64(salt),iv:b64(iv),data:b64(new Uint8Array(encrypted))};
   const blob=new Blob([JSON.stringify(pack)],{type:'application/octet-stream'}), url=URL.createObjectURL(blob), a=document.createElement('a');
@@ -450,6 +598,9 @@ async function restoreBackup(file) {
     if (Array.isArray(restored.paymentAccounts) && restored.paymentAccounts.length) {
       paymentAccounts=restored.paymentAccounts; localStorage.setItem(ACCOUNT_KEY,JSON.stringify(paymentAccounts)); renderPaymentAccounts();
     }
+    if (Array.isArray(restored.plannerItems)) {
+      plannerItems=restored.plannerItems; persistPlanner(); renderPlanner();
+    }
     persist(); renderRecent(); renderReport(); showBackup('復原完成。');
   } catch { showBackup('無法解密：密碼錯誤或檔案損壞。'); }
 }
@@ -464,6 +615,12 @@ document.addEventListener('click', event => {
   const nav=event.target.closest('[data-view]'); if(nav) switchView(nav.dataset.view);
   const chip=event.target.closest('[data-category]'); if(chip){category=chip.dataset.category;renderCategories();}
   const account=event.target.closest('[data-payment-account]'); if(account){paymentAccount=account.dataset.paymentAccount;renderPaymentAccounts();}
+  const plannerType=event.target.closest('[data-planner-kind]');
+  if(plannerType){plannerKind=plannerType.dataset.plannerKind;document.querySelector('#planner-message').textContent='';renderPlanner();}
+  const calendarDate=event.target.closest('[data-calendar-date]');
+  if(calendarDate){selectedPlannerDate=calendarDate.dataset.calendarDate;document.querySelector('#planner-message').textContent='';renderPlanner();}
+  const plannerToggle=event.target.closest('[data-planner-toggle]'); if(plannerToggle) togglePlannerItem(plannerToggle.dataset.plannerToggle);
+  const plannerDelete=event.target.closest('[data-planner-delete]'); if(plannerDelete) deletePlannerItem(plannerDelete.dataset.plannerDelete);
   const play=event.target.closest('[data-audio-id]');
   if(play){
     if(activeAudio && play.textContent.includes('停止')) { activeAudio.pause(); URL.revokeObjectURL(activeAudio.src); activeAudio=null; play.textContent='▶ 重聽原音'; }
@@ -481,7 +638,13 @@ document.querySelector('#restore-file').addEventListener('change', e => e.target
 document.querySelector('#save-payment-accounts').addEventListener('click', savePaymentAccounts);
 document.querySelector('#statement-file').addEventListener('change', e => e.target.files[0] && processStatementFile(e.target.files[0]));
 document.querySelector('#confirm-import').addEventListener('click', confirmImport);
+document.querySelector('#calendar-prev').addEventListener('click', () => changePlannerMonth(-1));
+document.querySelector('#calendar-next').addEventListener('click', () => changePlannerMonth(1));
+document.querySelector('#planner-save').addEventListener('click', addPlannerItem);
+document.querySelector('#planner-title').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); addPlannerItem(); }
+});
 window.addEventListener('beforeinstallprompt', event=>{event.preventDefault();deferredInstall=event;document.querySelector('#install-button').hidden=false;});
 document.querySelector('#install-button').addEventListener('click',async()=>{if(deferredInstall){deferredInstall.prompt();deferredInstall=null;}else alert('iPhone請按Safari分享按鈕，再選「加入主畫面」。');});
 if('serviceWorker'in navigator) navigator.serviceWorker.register('./sw.js');
-deleteDueAudio().then(()=>{renderRecent();renderReport();}); renderCategories(); renderPaymentAccounts(); renderRecent(); updateStorageStatus();
+deleteDueAudio().then(()=>{renderRecent();renderReport();}); renderCategories(); renderPaymentAccounts(); renderRecent(); renderPlanner(); updateStorageStatus();
