@@ -22,8 +22,11 @@ let speechRecognition;
 let finalTranscript = '';
 let activeAudio;
 let activeAudioButton;
+let pendingPlaybackRequest = 0;
+let savedPlaybackRequest = 0;
 const savedAudioUrls = new Map();
 const savedAudioLoads = new Map();
+const IS_IOS_WEBKIT = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let assistantTimer;
 let pendingImports = [];
 let deferredInstall;
@@ -262,12 +265,46 @@ function startSpeechRecognition() {
 }
 
 function stopSpeechRecognition() {
-  try { speechRecognition?.stop(); } catch {}
+  const recognition = speechRecognition;
   speechRecognition = null;
+  if (!recognition) { setAudioSessionType('playback'); return; }
+  recognition.onend = () => setAudioSessionType('playback');
+  try { recognition.stop(); } catch { setAudioSessionType('playback'); }
+  window.setTimeout(() => setAudioSessionType('playback'), 400);
+}
+
+function setAudioSessionType(type) {
+  try {
+    if (navigator.audioSession && 'type' in navigator.audioSession) navigator.audioSession.type = type;
+  } catch {}
+}
+
+function waitForAudio(milliseconds) {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
+
+async function playWithIOSAudioReset(player) {
+  setAudioSessionType('playback');
+  player.defaultMuted = false;
+  player.muted = false;
+  player.volume = 1;
+  await player.play();
+  if (!IS_IOS_WEBKIT) return;
+  await waitForAudio(160);
+  if (player.paused || player.ended) return;
+  player.pause();
+  try { player.currentTime = 0; } catch {}
+  setAudioSessionType('playback');
+  await waitForAudio(90);
+  player.defaultMuted = false;
+  player.muted = false;
+  player.volume = 1;
+  await player.play();
 }
 
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
+  setAudioSessionType('playback');
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = 'zh-TW';
@@ -357,25 +394,34 @@ function playPendingAudio() {
   const player = document.querySelector('#pending-audio-player');
   const button = document.querySelector('#play-pending');
   if (!pendingAudio || !player.src || button.disabled) return;
+  window.clearTimeout(assistantTimer);
   window.speechSynthesis?.cancel();
-  if (!player.paused) { player.pause(); button.textContent = '▶ 立即重聽'; return; }
+  if (!player.paused) {
+    pendingPlaybackRequest += 1;
+    player.pause();
+    try { player.currentTime = 0; } catch {}
+    button.textContent = '▶ 立即重聽';
+    return;
+  }
   try { player.currentTime = 0; } catch {}
-  player.defaultMuted = false;
-  player.muted = false;
-  player.volume = 1;
-  button.textContent = '■ 停止播放';
-  player.onended = () => { button.textContent = '▶ 再聽一次'; };
-  const playback = player.play();
-  playback?.catch(async () => {
-    await new Promise(resolve => window.setTimeout(resolve, 180));
-    try {
-      player.muted = false;
-      player.volume = 1;
-      await player.play();
-    } catch {
-      button.textContent = '▶ 再試一次';
-      alert('播放未啟動。請確認iPhone音量及藍牙喇叭後再試。');
-    }
+  const request = ++pendingPlaybackRequest;
+  button.disabled = true;
+  button.textContent = '正在開啟聲音…';
+  player.onended = () => {
+    if (request !== pendingPlaybackRequest) return;
+    button.disabled = false;
+    button.textContent = '▶ 再聽一次';
+    assistantTimer = window.setTimeout(analyzeAndConfirmSpeech, 450);
+  };
+  playWithIOSAudioReset(player).then(() => {
+    if (request !== pendingPlaybackRequest) return;
+    button.disabled = false;
+    button.textContent = '■ 停止播放';
+  }).catch(() => {
+    if (request !== pendingPlaybackRequest) return;
+    button.disabled = false;
+    button.textContent = '▶ 再試一次';
+    alert('播放未啟動。請確認iPhone音量及藍牙喇叭後再試。');
   });
 }
 
@@ -417,9 +463,13 @@ function prepareSavedAudioButtons() {
 
 function stopSavedAudio() {
   const player = document.querySelector('#saved-audio-player');
+  savedPlaybackRequest += 1;
   player.pause();
   try { player.currentTime = 0; } catch {}
-  if (activeAudioButton?.isConnected) activeAudioButton.textContent = '▶ 重聽原音';
+  if (activeAudioButton?.isConnected) {
+    activeAudioButton.disabled = false;
+    activeAudioButton.textContent = '▶ 重聽原音';
+  }
   activeAudio = null;
   activeAudioButton = null;
 }
@@ -445,21 +495,24 @@ function playSavedAudio(audioId, button) {
   player.volume = 1;
   activeAudio = player;
   activeAudioButton = button;
-  button.textContent = '■ 停止播放';
-  player.onended = stopSavedAudio;
-  player.onerror = () => {
-    stopSavedAudio();
-    alert('無法播放這段原音。');
+  const request = ++savedPlaybackRequest;
+  button.disabled = true;
+  button.textContent = '正在開啟聲音…';
+  player.onended = () => {
+    if (request === savedPlaybackRequest) stopSavedAudio();
   };
-  const playback = player.play();
-  playback?.catch(async () => {
-    await new Promise(resolve => window.setTimeout(resolve, 180));
-    if (activeAudio !== player || activeAudioButton !== button) return;
-    try {
-      player.muted = false;
-      player.volume = 1;
-      await player.play();
-    } catch {
+  player.onerror = () => {
+    if (request === savedPlaybackRequest) {
+      stopSavedAudio();
+      alert('無法播放這段原音。');
+    }
+  };
+  playWithIOSAudioReset(player).then(() => {
+    if (request !== savedPlaybackRequest || activeAudio !== player || activeAudioButton !== button) return;
+    button.disabled = false;
+    button.textContent = '■ 停止播放';
+  }).catch(() => {
+    if (request === savedPlaybackRequest) {
       stopSavedAudio();
       alert('播放未啟動。請確認iPhone音量及藍牙喇叭後再試。');
     }
@@ -483,6 +536,7 @@ async function startOrStopRecording() {
   if (recorder?.state === 'recording') { stopSpeechRecognition(); recorder.stop(); return; }
   if (!navigator.mediaDevices?.getUserMedia) { alert('這個瀏覽器不支援錄音。請使用Safari開啟。'); return; }
   try {
+    setAudioSessionType('play-and-record');
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
     recorder = new MediaRecorder(stream);
@@ -490,12 +544,13 @@ async function startOrStopRecording() {
     recorder.onstop = () => {
       pendingAudio = new Blob(audioChunks, { type: recorder.mimeType || 'audio/mp4' });
       stream.getTracks().forEach(track => track.stop());
+      setAudioSessionType('playback');
       recorder = null;
       button.textContent = '● 重新錄音'; button.classList.remove('recording');
       document.querySelector('#audio-message').hidden = false;
-      window.setTimeout(() => showPendingAudio(pendingAudio), 250);
+      window.setTimeout(() => showPendingAudio(pendingAudio), 550);
       window.clearTimeout(assistantTimer);
-      assistantTimer = window.setTimeout(analyzeAndConfirmSpeech, 900);
+      assistantTimer = window.setTimeout(analyzeAndConfirmSpeech, 1400);
     };
     recorder.start(); startSpeechRecognition(); button.textContent = '■ 停止錄音'; button.classList.add('recording');
   } catch { alert('無法使用麥克風，請檢查Safari權限。'); }
