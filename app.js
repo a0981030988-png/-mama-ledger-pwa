@@ -21,6 +21,9 @@ let pendingAudioUrl;
 let speechRecognition;
 let finalTranscript = '';
 let activeAudio;
+let activeAudioButton;
+const savedAudioUrls = new Map();
+const savedAudioLoads = new Map();
 let assistantTimer;
 let pendingImports = [];
 let deferredInstall;
@@ -222,10 +225,11 @@ function savePaymentAccounts() {
 
 function renderRecent() {
   const target = document.querySelector('#recent-entries');
-  if (!entries.length) { target.className = 'empty'; target.textContent = '還沒有帳目'; return; }
+  if (!entries.length) { target.className = 'empty'; target.textContent = '還沒有帳目'; prepareSavedAudioButtons(); return; }
   target.className = '';
   target.innerHTML = entries.slice().sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8).map(entry => `
-    <div class="entry-row"><div>${escapeHtml(entry.note)}<small>${entry.occurredAt}・${entry.category}・${escapeHtml(entry.paymentAccount || '未指定')}${entry.audio ? '・有原音' : ''}</small>${entry.transcript ? `<small>逐字稿：${escapeHtml(entry.transcript)}</small>` : ''}${entry.audioId ? `<button class="play-audio" data-audio-id="${entry.audioId}">▶ 重聽原音</button>` : ''}</div><strong>${money(entry.amount)}</strong></div>`).join('');
+    <div class="entry-row"><div>${escapeHtml(entry.note)}<small>${entry.occurredAt}・${entry.category}・${escapeHtml(entry.paymentAccount || '未指定')}${entry.audio ? '・有原音' : ''}</small>${entry.transcript ? `<small>逐字稿：${escapeHtml(entry.transcript)}</small>` : ''}${entry.audioId ? `<button class="play-audio" data-audio-id="${entry.audioId}" aria-busy="true" disabled>音檔準備中…</button>` : ''}</div><strong>${money(entry.amount)}</strong></div>`).join('');
+  prepareSavedAudioButtons();
 }
 
 function startSpeechRecognition() {
@@ -316,36 +320,150 @@ function analyzeAndConfirmSpeech() {
 }
 
 function showPendingAudio(blob) {
-  if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl);
-  pendingAudioUrl = URL.createObjectURL(blob);
-  document.querySelector('#pending-audio-player').src = pendingAudioUrl;
-  document.querySelector('#pending-audio-player').load();
-  document.querySelector('#audio-preview').hidden = false;
-}
-
-async function playPendingAudio() {
   const player = document.querySelector('#pending-audio-player');
   const button = document.querySelector('#play-pending');
-  if (!pendingAudio || !player.src) return;
+  if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl);
+  pendingAudioUrl = URL.createObjectURL(blob);
+  const currentUrl = pendingAudioUrl;
+  let failed = false;
+  button.disabled = true;
+  button.textContent = '音檔準備中…';
+  const markReady = () => {
+    if (pendingAudioUrl !== currentUrl || failed) return;
+    button.disabled = false;
+    button.textContent = '▶ 立即重聽';
+  };
+  let readyScheduled = false;
+  const scheduleReady = () => {
+    if (readyScheduled) return;
+    readyScheduled = true;
+    window.setTimeout(markReady, 180);
+  };
+  player.onloadedmetadata = scheduleReady;
+  player.oncanplay = scheduleReady;
+  player.onerror = () => {
+    if (pendingAudioUrl !== currentUrl) return;
+    failed = true;
+    button.disabled = true;
+    button.textContent = '音檔無法播放，請重新錄音';
+  };
+  player.src = currentUrl;
+  player.load();
+  document.querySelector('#audio-preview').hidden = false;
+  window.setTimeout(markReady, 1000);
+}
+
+function playPendingAudio() {
+  const player = document.querySelector('#pending-audio-player');
+  const button = document.querySelector('#play-pending');
+  if (!pendingAudio || !player.src || button.disabled) return;
   window.speechSynthesis?.cancel();
   if (!player.paused) { player.pause(); button.textContent = '▶ 立即重聽'; return; }
-  player.currentTime = 0;
+  try { player.currentTime = 0; } catch {}
+  player.defaultMuted = false;
+  player.muted = false;
   player.volume = 1;
   button.textContent = '■ 停止播放';
   player.onended = () => { button.textContent = '▶ 再聽一次'; };
-  try { await player.play(); } catch { button.textContent = '▶ 再試一次'; alert('iPhone尚未準備好音訊，請再按一次。'); }
+  const playback = player.play();
+  playback?.catch(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 180));
+    try {
+      player.muted = false;
+      player.volume = 1;
+      await player.play();
+    } catch {
+      button.textContent = '▶ 再試一次';
+      alert('播放未啟動。請確認iPhone音量及藍牙喇叭後再試。');
+    }
+  });
 }
 
-async function playSavedAudio(audioId, button) {
-  const blob = await audioGet(audioId);
-  if (!blob) { alert('這段原音已刪除或不存在。'); return; }
-  if (activeAudio) { activeAudio.pause(); URL.revokeObjectURL(activeAudio.src); }
-  const url = URL.createObjectURL(blob);
-  activeAudio = new Audio(url);
+async function ensureSavedAudioUrl(audioId) {
+  if (savedAudioUrls.has(audioId)) return savedAudioUrls.get(audioId);
+  if (savedAudioLoads.has(audioId)) return savedAudioLoads.get(audioId);
+  const loading = audioGet(audioId).then(blob => {
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    savedAudioUrls.set(audioId, url);
+    return url;
+  }).finally(() => savedAudioLoads.delete(audioId));
+  savedAudioLoads.set(audioId, loading);
+  return loading;
+}
+
+function prepareSavedAudioButtons() {
+  const liveIds = new Set(entries.map(entry => entry.audioId).filter(Boolean));
+  for (const [audioId, url] of savedAudioUrls) {
+    if (liveIds.has(audioId)) continue;
+    URL.revokeObjectURL(url);
+    savedAudioUrls.delete(audioId);
+  }
+  document.querySelectorAll('[data-audio-id]').forEach(async button => {
+    const audioId = button.dataset.audioId;
+    const url = await ensureSavedAudioUrl(audioId).catch(() => null);
+    if (!button.isConnected || button.dataset.audioId !== audioId) return;
+    if (!url) {
+      button.disabled = true;
+      button.removeAttribute('aria-busy');
+      button.textContent = '原音已刪除';
+      return;
+    }
+    button.disabled = false;
+    button.setAttribute('aria-busy', 'false');
+    button.textContent = '▶ 重聽原音';
+  });
+}
+
+function stopSavedAudio() {
+  const player = document.querySelector('#saved-audio-player');
+  player.pause();
+  try { player.currentTime = 0; } catch {}
+  if (activeAudioButton?.isConnected) activeAudioButton.textContent = '▶ 重聽原音';
+  activeAudio = null;
+  activeAudioButton = null;
+}
+
+function playSavedAudio(audioId, button) {
+  const url = savedAudioUrls.get(audioId);
+  if (!url) {
+    button.disabled = true;
+    button.textContent = '音檔準備中…';
+    prepareSavedAudioButtons();
+    return;
+  }
+  const player = document.querySelector('#saved-audio-player');
+  if (activeAudio === player && activeAudioButton === button && !player.paused) {
+    stopSavedAudio();
+    return;
+  }
+  window.speechSynthesis?.cancel();
+  stopSavedAudio();
+  player.src = url;
+  player.defaultMuted = false;
+  player.muted = false;
+  player.volume = 1;
+  activeAudio = player;
+  activeAudioButton = button;
   button.textContent = '■ 停止播放';
-  activeAudio.onended = () => { button.textContent = '▶ 重聽原音'; URL.revokeObjectURL(url); activeAudio = null; };
-  activeAudio.onerror = () => { button.textContent = '▶ 重聽原音'; URL.revokeObjectURL(url); activeAudio = null; alert('無法播放這段原音。'); };
-  await activeAudio.play();
+  player.onended = stopSavedAudio;
+  player.onerror = () => {
+    stopSavedAudio();
+    alert('無法播放這段原音。');
+  };
+  const playback = player.play();
+  playback?.catch(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 180));
+    if (activeAudio !== player || activeAudioButton !== button) return;
+    try {
+      player.muted = false;
+      player.volume = 1;
+      await player.play();
+    } catch {
+      stopSavedAudio();
+      alert('播放未啟動。請確認iPhone音量及藍牙喇叭後再試。');
+    }
+  });
 }
 
 function renderReport() {
@@ -394,7 +512,11 @@ async function saveEntry() {
   persist(); pendingAudio = null;
   document.querySelector('#amount').value = ''; document.querySelector('#note').value = ''; document.querySelector('#transcript').value = '';
   document.querySelector('#audio-message').hidden = true; document.querySelector('#record-button').textContent = '● 錄下原始語音';
-  document.querySelector('#audio-preview').hidden = true; document.querySelector('#pending-audio-player').removeAttribute('src');
+  const pendingPlayer = document.querySelector('#pending-audio-player');
+  pendingPlayer.pause(); pendingPlayer.removeAttribute('src'); pendingPlayer.load();
+  const pendingButton = document.querySelector('#play-pending');
+  pendingButton.disabled = true; pendingButton.textContent = '音檔準備中…';
+  document.querySelector('#audio-preview').hidden = true;
   if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl); pendingAudioUrl = null;
   document.querySelector('#speech-status').textContent = '國語辨識為輔助功能；台語腔調可能需要手動修正。';
   renderRecent(); alert(`已記下：${note} ${money(amount)}`);
@@ -804,10 +926,7 @@ document.addEventListener('click', event => {
   const plannerToggle=event.target.closest('[data-planner-toggle]'); if(plannerToggle) togglePlannerItem(plannerToggle.dataset.plannerToggle);
   const plannerDelete=event.target.closest('[data-planner-delete]'); if(plannerDelete) deletePlannerItem(plannerDelete.dataset.plannerDelete);
   const play=event.target.closest('[data-audio-id]');
-  if(play){
-    if(activeAudio && play.textContent.includes('停止')) { activeAudio.pause(); URL.revokeObjectURL(activeAudio.src); activeAudio=null; play.textContent='▶ 重聽原音'; }
-    else playSavedAudio(play.dataset.audioId,play).catch(()=>alert('無法播放這段原音。'));
-  }
+  if(play && !play.disabled) playSavedAudio(play.dataset.audioId, play);
 });
 document.querySelector('#record-button').addEventListener('click', startOrStopRecording);
 document.querySelector('#play-pending').addEventListener('click', playPendingAudio);
