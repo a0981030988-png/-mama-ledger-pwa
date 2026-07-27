@@ -24,6 +24,10 @@ let activeAudio;
 let assistantTimer;
 let pendingImports = [];
 let deferredInstall;
+let redactionSourceFile;
+let redactionImage;
+let redactionStrokes = [];
+let activeRedactionStroke;
 
 function openAudioDb() {
   return new Promise((resolve, reject) => {
@@ -424,6 +428,184 @@ function importedCategory(note) {
   return inferCategory(note) || (/手續費/.test(note) ? '其他' : '其他');
 }
 
+function redactionCanvasPoint(event) {
+  const canvas = document.querySelector('#redaction-canvas');
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) * (canvas.width / rect.width),
+    y: (event.clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+function drawRedactionStroke(stroke, fromIndex = 1) {
+  const canvas = document.querySelector('#redaction-canvas');
+  const context = canvas.getContext('2d');
+  const points = stroke.points;
+  if (!points.length) return;
+  context.save();
+  context.strokeStyle = '#111111';
+  context.fillStyle = '#111111';
+  context.lineWidth = stroke.width;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  if (points.length === 1) {
+    context.beginPath();
+    context.arc(points[0].x, points[0].y, stroke.width / 2, 0, Math.PI * 2);
+    context.fill();
+  } else {
+    const start = Math.max(1, fromIndex);
+    context.beginPath();
+    context.moveTo(points[start - 1].x, points[start - 1].y);
+    for (let index = start; index < points.length; index += 1) context.lineTo(points[index].x, points[index].y);
+    context.stroke();
+  }
+  context.restore();
+}
+
+function redrawRedactionCanvas() {
+  const canvas = document.querySelector('#redaction-canvas');
+  const context = canvas.getContext('2d');
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (redactionImage) context.drawImage(redactionImage, 0, 0, canvas.width, canvas.height);
+  redactionStrokes.forEach(stroke => drawRedactionStroke(stroke));
+}
+
+function beginRedaction(event) {
+  if (!redactionImage) return;
+  event.preventDefault();
+  const canvas = document.querySelector('#redaction-canvas');
+  const rect = canvas.getBoundingClientRect();
+  const displayWidth = Number(document.querySelector('#redaction-brush-size').value);
+  activeRedactionStroke = {
+    pointerId: event.pointerId,
+    width: displayWidth * (canvas.width / rect.width),
+    points: [redactionCanvasPoint(event)]
+  };
+  redactionStrokes.push(activeRedactionStroke);
+  canvas.setPointerCapture?.(event.pointerId);
+  drawRedactionStroke(activeRedactionStroke);
+  document.querySelector('#redaction-message').textContent = '正在遮蔽；可以按「復原一筆」重畫。';
+}
+
+function moveRedaction(event) {
+  if (!activeRedactionStroke || event.pointerId !== activeRedactionStroke.pointerId) return;
+  event.preventDefault();
+  activeRedactionStroke.points.push(redactionCanvasPoint(event));
+  drawRedactionStroke(activeRedactionStroke, activeRedactionStroke.points.length - 1);
+}
+
+function endRedaction(event) {
+  if (!activeRedactionStroke || event.pointerId !== activeRedactionStroke.pointerId) return;
+  document.querySelector('#redaction-canvas').releasePointerCapture?.(event.pointerId);
+  activeRedactionStroke = null;
+}
+
+async function openRedactionEditor(file) {
+  const editor = document.querySelector('#redaction-editor');
+  const canvas = document.querySelector('#redaction-canvas');
+  const message = document.querySelector('#redaction-message');
+  const imageUrl = URL.createObjectURL(file);
+  const image = new Image();
+  message.textContent = '正在準備照片…';
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = reject;
+      image.src = imageUrl;
+    });
+    redactionSourceFile = file;
+    redactionImage = image;
+    redactionStrokes = [];
+    activeRedactionStroke = null;
+    const maxDimension = 2600;
+    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    redrawRedactionCanvas();
+    document.querySelector('#redaction-file-name').textContent = `目前照片：${file.name}`;
+    message.textContent = '請用手指在個人資料上來回塗黑。';
+    editor.hidden = false;
+    editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.querySelector('#import-preview').className = 'empty';
+    document.querySelector('#import-preview').textContent = '完成遮蔽後，才會讀取這張照片。';
+  } catch {
+    closeRedactionEditor();
+    document.querySelector('#import-status').textContent = '無法開啟這張照片，請改用 JPG、PNG 或螢幕截圖。';
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
+}
+
+function closeRedactionEditor() {
+  document.querySelector('#redaction-editor').hidden = true;
+  document.querySelector('#redaction-file-name').textContent = '';
+  document.querySelector('#redaction-message').textContent = '';
+  document.querySelector('#statement-file').value = '';
+  redactionSourceFile = null;
+  redactionImage = null;
+  redactionStrokes = [];
+  activeRedactionStroke = null;
+}
+
+function redactedImageFile() {
+  const canvas = document.querySelector('#redaction-canvas');
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (!blob) { reject(new Error('image')); return; }
+      const sourceName = redactionSourceFile?.name || '帳單照片';
+      const baseName = sourceName.replace(/\.[^.]+$/, '');
+      resolve(new File([blob], `${baseName}-已遮蔽.png`, { type: 'image/png', lastModified: Date.now() }));
+    }, 'image/png');
+  });
+}
+
+async function finishRedaction() {
+  if (!redactionSourceFile) return;
+  if (!redactionStrokes.length && !confirm('目前沒有塗黑任何資料，仍要直接辨識嗎？')) return;
+  const message = document.querySelector('#redaction-message');
+  try {
+    message.textContent = '正在產生已遮蔽的新圖片…';
+    const file = await redactedImageFile();
+    closeRedactionEditor();
+    await processStatementFile(file);
+  } catch {
+    message.textContent = '無法產生遮蔽圖片，請重試一次。';
+  }
+}
+
+async function shareRedactedImage() {
+  if (!redactionSourceFile) return;
+  if (!redactionStrokes.length) {
+    document.querySelector('#redaction-message').textContent = '還沒有遮蔽任何資料。';
+    return;
+  }
+  const message = document.querySelector('#redaction-message');
+  try {
+    const file = await redactedImageFile();
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: '已遮蔽個資的帳單照片' });
+      message.textContent = '已開啟分享選單；請選擇「儲存到檔案」或要傳送的位置。';
+    } else {
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      message.textContent = '已下載已遮蔽的圖片。';
+    }
+  } catch (error) {
+    if (error?.name !== 'AbortError') message.textContent = '未能儲存圖片，請再試一次。';
+  }
+}
+
+async function skipRedaction() {
+  if (!redactionSourceFile) return;
+  const file = redactionSourceFile;
+  closeRedactionEditor();
+  await processStatementFile(file);
+}
+
 function parseCtbcText(text) {
   const results = [];
   for (const rawLine of text.split(/\n+/)) {
@@ -636,8 +818,35 @@ document.querySelector('#cancel-deletion').addEventListener('click', cancelDelet
 document.querySelector('#export-backup').addEventListener('click', exportBackup);
 document.querySelector('#restore-file').addEventListener('change', e => e.target.files[0] && restoreBackup(e.target.files[0]));
 document.querySelector('#save-payment-accounts').addEventListener('click', savePaymentAccounts);
-document.querySelector('#statement-file').addEventListener('change', e => e.target.files[0] && processStatementFile(e.target.files[0]));
+document.querySelector('#statement-file').addEventListener('change', event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/i.test(file.name);
+  if (isImage) openRedactionEditor(file);
+  else processStatementFile(file);
+});
 document.querySelector('#confirm-import').addEventListener('click', confirmImport);
+document.querySelector('#redaction-canvas').addEventListener('pointerdown', beginRedaction);
+document.querySelector('#redaction-canvas').addEventListener('pointermove', moveRedaction);
+document.querySelector('#redaction-canvas').addEventListener('pointerup', endRedaction);
+document.querySelector('#redaction-canvas').addEventListener('pointercancel', endRedaction);
+document.querySelector('#redaction-undo').addEventListener('click', () => {
+  redactionStrokes.pop();
+  activeRedactionStroke = null;
+  redrawRedactionCanvas();
+  document.querySelector('#redaction-message').textContent = redactionStrokes.length ? '已復原最後一筆。' : '目前沒有遮蔽筆跡。';
+});
+document.querySelector('#redaction-reset').addEventListener('click', () => {
+  if (redactionStrokes.length && !confirm('要清除目前所有遮蔽筆跡，重新塗嗎？')) return;
+  redactionStrokes = [];
+  activeRedactionStroke = null;
+  redrawRedactionCanvas();
+  document.querySelector('#redaction-message').textContent = '已清除遮蔽筆跡，可以重新塗。';
+});
+document.querySelector('#redaction-finish').addEventListener('click', finishRedaction);
+document.querySelector('#redaction-save').addEventListener('click', shareRedactedImage);
+document.querySelector('#redaction-skip').addEventListener('click', skipRedaction);
+document.querySelector('#redaction-cancel').addEventListener('click', closeRedactionEditor);
 document.querySelector('#calendar-prev').addEventListener('click', () => changePlannerMonth(-1));
 document.querySelector('#calendar-next').addEventListener('click', () => changePlannerMonth(1));
 document.querySelector('#planner-save').addEventListener('click', addPlannerItem);
