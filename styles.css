@@ -55,6 +55,15 @@ fieldset { margin: 14px 0 0; padding: 0; border: 0; }
 .import-item input { width: 24px; height: 24px; }
 .import-item small { display: block; color: var(--muted); }
 .import-kind { display: inline-block; margin-top: 4px; padding: 3px 8px; border-radius: 10px; background: var(--soft); font-size: 14px; font-weight: 800; }
+.redaction-editor { margin-top: 18px; padding-top: 18px; border-top: 2px dashed var(--line); }
+.redaction-editor > p { margin: 6px 0 12px; }
+.redaction-file-name { color: var(--green); font-weight: 800; overflow-wrap: anywhere; }
+.redaction-canvas-wrap { overflow: hidden; margin-top: 12px; border: 3px solid var(--ink); border-radius: 16px; background: #d8d8d8; box-shadow: inset 0 0 0 1px white; }
+#redaction-canvas { display: block; width: 100%; height: auto; background: white; touch-action: none; cursor: crosshair; }
+.redaction-slider { width: 100%; height: 42px; accent-color: #111; }
+.redaction-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.redaction-small { margin-top: 8px; }
+.redaction-cancel { display: block; width: 100%; min-height: 48px; margin-top: 12px; border: 0; background: transparent; color: var(--red); font-weight: 900; text-decoration: underline; }
 .danger-outline { border: 2px solid var(--red); background: transparent; color: var(--red); }
 .small { width: auto; min-height: 44px; margin: 0; padding: 8px 14px; }
 .card { margin-top: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 8px 24px rgba(74, 45, 28, .06); }
