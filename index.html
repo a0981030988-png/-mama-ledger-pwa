@@ -52,9 +52,10 @@
       <p class="message success" id="audio-message" hidden>語音已暫存，確認月報7天後才刪除</p>
       <div class="audio-preview" id="audio-preview" hidden>
         <strong>先重聽這次錄音</strong>
-        <button class="play-pending" id="play-pending" type="button">▶ 立即重聽</button>
+        <button class="play-pending" id="play-pending" type="button" disabled>音檔準備中…</button>
         <audio id="pending-audio-player" preload="auto" playsinline hidden></audio>
       </div>
+      <audio id="saved-audio-player" preload="auto" playsinline hidden></audio>
       <label for="transcript">語音逐字稿（可以自己修改）</label>
       <textarea id="transcript" class="text-input transcript" rows="3" placeholder="錄音後會嘗試顯示；若手機不支援，可直接手動輸入。"></textarea>
       <p class="hint" id="speech-status">國語辨識為輔助功能；台語腔調可能需要手動修正。</p>
