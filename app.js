@@ -618,8 +618,14 @@ async function deleteDueAudio() {
 }
 
 function normalizeImportedDate(value) {
-  const match = String(value || '').match(/(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})/);
-  return match ? `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}` : null;
+  const source = String(value || '');
+  const western = source.match(/(20\d{2})\s*(?:年|[\/.-])\s*(\d{1,2})\s*(?:月|[\/.-])\s*(\d{1,2})/);
+  if (western) return `${western[1]}-${western[2].padStart(2, '0')}-${western[3].padStart(2, '0')}`;
+  const taiwan = source.match(/(?:^|\D)(\d{2,3})\s*(?:年|[\/.-])\s*(\d{1,2})\s*(?:月|[\/.-])\s*(\d{1,2})/);
+  if (!taiwan) return null;
+  const year = Number(taiwan[1]);
+  if (!Number.isInteger(year) || year < 1 || year > 200) return null;
+  return `${year + 1911}-${taiwan[2].padStart(2, '0')}-${taiwan[3].padStart(2, '0')}`;
 }
 
 function classifyImportedTransaction(note, income = false) {
@@ -630,6 +636,46 @@ function classifyImportedTransaction(note, income = false) {
 
 function importedCategory(note) {
   return inferCategory(note) || (/手續費/.test(note) ? '其他' : '其他');
+}
+
+function isTaiPowerText(text) {
+  return /台\s*灣\s*電\s*力|台電|應\s*繳\s*金\s*額|用\s*電\s*量|繳\s*費\s*[\/／]?\s*銷\s*帳\s*日\s*期/.test(String(text || ''));
+}
+
+function parseTaiPowerText(text) {
+  const source = String(text || '');
+  if (!isTaiPowerText(source)) return [];
+
+  const amountLabel = source.match(/應\s*繳\s*(?:總\s*)?金\s*額|繳\s*費\s*總\s*金\s*額/);
+  if (!amountLabel) return [];
+  const amountArea = source.slice(amountLabel.index + amountLabel[0].length, amountLabel.index + amountLabel[0].length + 90);
+  const formattedAmount = amountArea.match(/[0-9]{1,3}(?:\s*,\s*[0-9]{3})+/);
+  const amountLine = amountArea.split(/\n/).map(line => line.match(/^\s*[＄$]?\s*([0-9][0-9,\s]{0,14})\s*(?:元|[=－-])?\s*$/)).find(Boolean);
+  const amountWithUnit = amountArea.match(/([0-9][0-9,\s]{0,14})\s*元/);
+  const amountText = formattedAmount?.[0] || amountLine?.[1] || amountWithUnit?.[1] || '';
+  const amount = Number(amountText.replace(/\D/g, ''));
+
+  const paidDateMatch = source.match(
+    /(?:繳\s*費\s*[\/／]?\s*銷\s*帳\s*日\s*期|銷\s*帳\s*日\s*期|繳\s*費\s*日\s*期)[^0-9]{0,40}((?:20\d{2}|\d{2,3})\s*(?:年|[\/.-])\s*\d{1,2}\s*(?:月|[\/.-])\s*\d{1,2})/
+  );
+  const occurredAt = normalizeImportedDate(paidDateMatch?.[1]);
+  const paid = /已\s*繳\s*費/.test(source) || Boolean(occurredAt);
+  if (!Number.isFinite(amount) || amount <= 0 || !occurredAt || !paid) return [];
+
+  const billMonth = source.match(/(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(?:應\s*繳\s*金\s*額|電\s*費)/);
+  const note = billMonth
+    ? `台電${billMonth[1]}年${String(Number(billMonth[2])).padStart(2, '0')}月電費`
+    : '台灣電力公司電費';
+
+  return [{
+    occurredAt,
+    amount,
+    note,
+    category: '水電',
+    transactionKind: 'expense',
+    paymentAccount: '帳單匯入',
+    selected: true
+  }];
 }
 
 function redactionCanvasPoint(event) {
@@ -922,16 +968,25 @@ async function processStatementFile(file) {
   preview.className = 'empty'; preview.textContent = `正在讀取：${file.name}`; status.textContent = '資料只在這台手機處理，不會上傳帳單。';
   try {
     let text;
+    let parsedAsCtbc = false;
+    let detectedTaiPower = false;
     if (/csv/i.test(file.type) || file.name.toLowerCase().endsWith('.csv')) pendingImports = parseCsv(await file.text());
     else {
       text = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf') ? await extractPdfText(file) : await extractImageText(file);
-      pendingImports = parseCtbcText(text);
+      detectedTaiPower = isTaiPowerText(text);
+      pendingImports = parseTaiPowerText(text);
+      if (!pendingImports.length && !detectedTaiPower) {
+        pendingImports = parseCtbcText(text);
+        parsedAsCtbc = true;
+      }
     }
     const localCtbcAccount = paymentAccounts.find(name => /中信.*金融卡/.test(name)) || paymentAccounts.find(name => name.includes('中信'));
-    if (localCtbcAccount && !/csv/i.test(file.type) && !file.name.toLowerCase().endsWith('.csv')) {
+    if (localCtbcAccount && parsedAsCtbc) {
       pendingImports = pendingImports.map(item => ({ ...item, paymentAccount: localCtbcAccount }));
     }
-    status.textContent = `辨識完成：找到 ${pendingImports.length} 筆。請逐筆勾選後確認。`;
+    status.textContent = detectedTaiPower && !pendingImports.length
+      ? '已讀到台電帳單，但沒有同時辨識到金額與繳費／銷帳日期，因此沒有列為支出。請保留這兩個欄位後重試。'
+      : `辨識完成：找到 ${pendingImports.length} 筆。請逐筆勾選後確認。`;
     renderImportPreview();
   } catch (error) {
     console.error(error); pendingImports = []; renderImportPreview(); status.textContent = '辨識失敗。請確認網路後重試，或改用原始 PDF／CSV。';
