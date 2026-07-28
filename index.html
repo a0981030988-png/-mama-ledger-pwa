@@ -24,7 +24,7 @@
   <nav aria-label="主要功能">
     <button class="nav-button active" data-view="entry">記帳</button>
     <button class="nav-button" data-view="import">帳單</button>
-    <button class="nav-button" data-view="report">月報</button>
+    <button class="nav-button" data-view="report">明細</button>
     <button class="nav-button" data-view="planner">生活</button>
     <button class="nav-button" data-view="backup">備份</button>
   </nav>
@@ -99,15 +99,46 @@
         <button class="primary" id="confirm-import" hidden>確認匯入勾選項目</button>
       </div>
       <div class="notice"><strong>隱私：</strong>免費版不登入信箱。請從Mail下載附件或截圖，再自行選取。</div>
+      <div class="card">
+        <h2>已匯入清單</h2>
+        <p>匯入完成後會保留在這裡，也會同時出現在「明細」。</p>
+        <div id="import-history" class="empty">目前還沒有已匯入的交易。</div>
+      </div>
     </section>
 
     <section class="view" id="view-report">
       <div class="card report-card">
-        <p id="report-month"></p>
+        <div class="report-month-toolbar">
+          <button class="calendar-arrow" id="report-prev" type="button" aria-label="上一個月">‹</button>
+          <h2 id="report-month">本月</h2>
+          <button class="calendar-arrow" id="report-next" type="button" aria-label="下一個月">›</button>
+        </div>
         <h2>本月支出</h2>
         <div class="report-total" id="report-total">$0</div>
         <div id="report-rows"></div>
       </div>
+      <div class="card">
+        <h2>全部帳目</h2>
+        <input id="report-search" class="text-input" type="search" placeholder="搜尋名稱、分類或帳戶" />
+        <div class="report-filters">
+          <label for="report-kind-filter">種類
+            <select class="select-input" id="report-kind-filter">
+              <option value="all">全部種類</option>
+              <option value="expense">支出</option>
+              <option value="income">收入／退款</option>
+              <option value="transfer">轉帳（不計支出）</option>
+            </select>
+          </label>
+          <label for="report-account-filter">扣款帳戶
+            <select class="select-input" id="report-account-filter">
+              <option value="all">全部帳戶</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint" id="report-count"></p>
+        <div id="report-entry-list" class="empty">這個月還沒有帳目。</div>
+      </div>
+      <p class="message success" id="data-update-message"></p>
       <button class="danger-outline" id="confirm-report">報表正確，7天後刪除原始音檔</button>
       <button class="secondary" id="cancel-deletion" hidden>取消本月音檔刪除</button>
       <p class="message" id="deletion-message"></p>
@@ -188,6 +219,33 @@
         <button value="cancel" class="secondary">取消</button>
         <button value="confirm" class="primary" id="dialog-confirm">確認</button>
       </div>
+    </form>
+  </dialog>
+  <dialog id="entry-edit-dialog">
+    <form id="entry-edit-form">
+      <h2>修改帳目</h2>
+      <p class="hint" id="edit-entry-source"></p>
+      <input id="edit-entry-id" type="hidden" />
+      <label for="edit-entry-date">交易日</label>
+      <input class="text-input" id="edit-entry-date" type="date" required />
+      <label for="edit-entry-amount">金額</label>
+      <input class="text-input" id="edit-entry-amount" type="number" min="0.01" step="0.01" inputmode="decimal" required />
+      <label for="edit-entry-note">名稱</label>
+      <input class="text-input" id="edit-entry-note" required />
+      <label for="edit-entry-category">分類</label>
+      <select class="select-input" id="edit-entry-category"></select>
+      <label for="edit-entry-account">扣款帳戶</label>
+      <select class="select-input" id="edit-entry-account"></select>
+      <label for="edit-entry-kind">種類</label>
+      <select class="select-input" id="edit-entry-kind">
+        <option value="expense">支出</option>
+        <option value="income">收入／退款</option>
+        <option value="transfer">轉帳（不計支出）</option>
+      </select>
+      <p class="message" id="entry-edit-message"></p>
+      <button class="primary" type="submit">儲存修改</button>
+      <button class="danger-outline" id="delete-entry" type="button">刪除這筆</button>
+      <button class="secondary" id="cancel-entry-edit" type="button">取消</button>
     </form>
   </dialog>
   <script type="module" src="app.js"></script>
