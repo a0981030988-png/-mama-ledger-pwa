@@ -3,10 +3,13 @@ const ACCOUNT_KEY = 'mama-ledger.payment-accounts.v1';
 const STORE_KEY = 'mama-ledger.entries.v1';
 const META_KEY = 'mama-ledger.meta.v1';
 const PLANNER_KEY = 'mama-ledger.planner.v1';
+const ELECTRIC_ACCOUNT_MIGRATION_KEY = 'mama-ledger.migration.electric-9372-account.v1';
 let entries = safeParse(localStorage.getItem(STORE_KEY), []);
+if (!Array.isArray(entries)) entries = [];
 let meta = safeParse(localStorage.getItem(META_KEY), { lastBackupAt: null });
 let category = '買菜';
 let paymentAccounts = safeParse(localStorage.getItem(ACCOUNT_KEY), ['現金', '悠遊卡']);
+if (!Array.isArray(paymentAccounts)) paymentAccounts = ['現金', '悠遊卡'];
 let paymentAccount = '現金';
 let plannerItems = safeParse(localStorage.getItem(PLANNER_KEY), []);
 if (!Array.isArray(plannerItems)) plannerItems = [];
@@ -14,6 +17,8 @@ let plannerKind = 'todo';
 let selectedPlannerDate = isoDay();
 let plannerCursor = new Date();
 plannerCursor = new Date(plannerCursor.getFullYear(), plannerCursor.getMonth(), 1, 12);
+let reportCursor = new Date();
+reportCursor = new Date(reportCursor.getFullYear(), reportCursor.getMonth(), 1, 12);
 let recorder;
 let audioChunks = [];
 let pendingAudio;
@@ -29,6 +34,8 @@ const savedAudioLoads = new Map();
 const IS_IOS_WEBKIT = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let assistantTimer;
 let pendingImports = [];
+let pendingImportSource = '';
+let dataUpdateMessage = '';
 let deferredInstall;
 let redactionSourceFile;
 let redactionImage;
@@ -58,6 +65,7 @@ function localDateParts(date = new Date()) {
 }
 function isoDay() { return localDateParts().day; }
 function monthKey() { return localDateParts().month; }
+function reportMonthKey() { return localDateParts(reportCursor).month; }
 function money(value) { return `$${Number(value || 0).toLocaleString('zh-TW')}`; }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 
@@ -65,6 +73,7 @@ function switchView(name) {
   document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${name}`));
   document.querySelectorAll('.nav-button').forEach(el => el.classList.toggle('active', el.dataset.view === name));
   if (name === 'report') renderReport();
+  if (name === 'import') renderImportHistory();
   if (name === 'planner') renderPlanner();
 }
 
@@ -226,12 +235,36 @@ function savePaymentAccounts() {
   document.querySelector('#account-settings-message').textContent = `已儲存 ${paymentAccounts.length} 個帳戶，只存在這台手機。`;
 }
 
+function entryKindLabel(entry) {
+  return entry.transactionKind === 'income' ? '收入／退款' : entry.transactionKind === 'transfer' ? '轉帳（不計支出）' : '支出';
+}
+
+function entrySourceLabel(entry) {
+  return entry.importedAt ? '帳單匯入' : '手動記帳';
+}
+
+function entryRowHtml(entry, compact = false) {
+  return `
+    <div class="entry-row ${compact ? 'compact' : ''}">
+      <div class="entry-main">
+        <strong class="entry-note">${escapeHtml(entry.note)}</strong>
+        <small>${entry.occurredAt}・${entry.category}・${escapeHtml(entry.paymentAccount || '未指定')}</small>
+        <small>${entryKindLabel(entry)}・${entrySourceLabel(entry)}${entry.importSource ? `・${escapeHtml(entry.importSource)}` : ''}${entry.audio ? '・有原音' : ''}</small>
+        ${!compact && entry.transcript ? `<small>逐字稿：${escapeHtml(entry.transcript)}</small>` : ''}
+        ${!compact && entry.audioId ? `<button class="play-audio" data-audio-id="${escapeHtml(entry.audioId)}" aria-busy="true" disabled>音檔準備中…</button>` : ''}
+      </div>
+      <div class="entry-side">
+        <strong>${money(entry.amount)}</strong>
+        <button class="entry-edit" type="button" data-edit-entry="${escapeHtml(entry.id)}">修改</button>
+      </div>
+    </div>`;
+}
+
 function renderRecent() {
   const target = document.querySelector('#recent-entries');
   if (!entries.length) { target.className = 'empty'; target.textContent = '還沒有帳目'; prepareSavedAudioButtons(); return; }
   target.className = '';
-  target.innerHTML = entries.slice().sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8).map(entry => `
-    <div class="entry-row"><div>${escapeHtml(entry.note)}<small>${entry.occurredAt}・${entry.category}・${escapeHtml(entry.paymentAccount || '未指定')}${entry.audio ? '・有原音' : ''}</small>${entry.transcript ? `<small>逐字稿：${escapeHtml(entry.transcript)}</small>` : ''}${entry.audioId ? `<button class="play-audio" data-audio-id="${entry.audioId}" aria-busy="true" disabled>音檔準備中…</button>` : ''}</div><strong>${money(entry.amount)}</strong></div>`).join('');
+  target.innerHTML = entries.slice().sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 8).map(entry => entryRowHtml(entry)).join('');
   prepareSavedAudioButtons();
 }
 
@@ -546,16 +579,164 @@ function playSavedAudio(audioId, button) {
   });
 }
 
+function changeReportMonth(offset) {
+  reportCursor = new Date(reportCursor.getFullYear(), reportCursor.getMonth() + offset, 1, 12);
+  renderReport();
+}
+
+function refreshReportAccountFilter() {
+  const select = document.querySelector('#report-account-filter');
+  const current = select.value || 'all';
+  const accounts = [...new Set(entries.map(entry => entry.paymentAccount).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-TW'));
+  select.innerHTML = `<option value="all">全部帳戶</option>${accounts.map(account => `<option value="${escapeHtml(account)}">${escapeHtml(account)}</option>`).join('')}`;
+  select.value = accounts.includes(current) ? current : 'all';
+}
+
 function renderReport() {
-  const month = monthKey();
+  const month = reportMonthKey();
+  const monthEntries = entries.filter(entry => String(entry.occurredAt || '').startsWith(month));
   const totals = Object.fromEntries(CATEGORIES.map(item => [item, 0]));
-  entries.filter(e => e.occurredAt.startsWith(month) && !['income','transfer'].includes(e.transactionKind)).forEach(e => totals[e.category] += Number(e.amount));
-  document.querySelector('#report-month').textContent = month;
+  monthEntries.filter(entry => !['income','transfer'].includes(entry.transactionKind)).forEach(entry => {
+    if (!(entry.category in totals)) totals[entry.category] = 0;
+    totals[entry.category] += Number(entry.amount);
+  });
+
+  document.querySelector('#report-month').textContent = `${reportCursor.getFullYear()}年${reportCursor.getMonth() + 1}月`;
   document.querySelector('#report-total').textContent = money(Object.values(totals).reduce((a,b) => a+b, 0));
   document.querySelector('#report-rows').innerHTML = CATEGORIES.map(item => `<div class="report-row"><span>${item}</span><strong>${money(totals[item])}</strong></div>`).join('');
-  const scheduled = entries.filter(e => e.occurredAt.startsWith(month) && e.audioDeleteAfter);
+  refreshReportAccountFilter();
+
+  const query = document.querySelector('#report-search').value.trim().toLowerCase();
+  const kind = document.querySelector('#report-kind-filter').value;
+  const account = document.querySelector('#report-account-filter').value;
+  const visible = monthEntries
+    .filter(entry => kind === 'all' || entry.transactionKind === kind)
+    .filter(entry => account === 'all' || entry.paymentAccount === account)
+    .filter(entry => !query || `${entry.note} ${entry.category} ${entry.paymentAccount || ''} ${entry.transcript || ''}`.toLowerCase().includes(query))
+    .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)) || String(b.createdAt).localeCompare(String(a.createdAt)));
+
+  const list = document.querySelector('#report-entry-list');
+  if (!visible.length) {
+    list.className = 'empty';
+    list.textContent = monthEntries.length ? '目前篩選條件沒有帳目。' : '這個月還沒有帳目。';
+  } else {
+    list.className = 'report-entry-list';
+    list.innerHTML = visible.map(entry => entryRowHtml(entry, true)).join('');
+  }
+  document.querySelector('#report-count').textContent = `顯示 ${visible.length} 筆；本月共 ${monthEntries.length} 筆。`;
+
+  const scheduled = monthEntries.filter(entry => entry.audioDeleteAfter);
   document.querySelector('#cancel-deletion').hidden = !scheduled.length;
   document.querySelector('#deletion-message').textContent = scheduled.length ? `已有 ${scheduled.length} 段音檔排定於 ${new Date(scheduled[0].audioDeleteAfter).toLocaleDateString('zh-TW')} 後刪除。` : '確認後有7天可以取消。';
+  document.querySelector('#data-update-message').textContent = dataUpdateMessage;
+}
+
+function openEntryEditor(id) {
+  const entry = entries.find(candidate => candidate.id === id);
+  if (!entry) return;
+  const categorySelect = document.querySelector('#edit-entry-category');
+  categorySelect.innerHTML = CATEGORIES.map(item => `<option value="${item}">${item}</option>`).join('');
+  categorySelect.value = CATEGORIES.includes(entry.category) ? entry.category : '其他';
+
+  const accountSelect = document.querySelector('#edit-entry-account');
+  const accounts = [...new Set([...paymentAccounts, entry.paymentAccount].filter(Boolean))];
+  accountSelect.innerHTML = accounts.map(item => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+  accountSelect.value = entry.paymentAccount || accounts[0] || '';
+
+  document.querySelector('#edit-entry-id').value = entry.id;
+  document.querySelector('#edit-entry-date').value = entry.occurredAt;
+  document.querySelector('#edit-entry-amount').value = entry.amount;
+  document.querySelector('#edit-entry-note').value = entry.note;
+  document.querySelector('#edit-entry-kind').value = entry.transactionKind || 'expense';
+  document.querySelector('#edit-entry-source').textContent = `${entrySourceLabel(entry)}${entry.importSource ? `・${entry.importSource}` : ''}`;
+  document.querySelector('#entry-edit-message').textContent = '';
+  document.querySelector('#entry-edit-dialog').showModal();
+}
+
+function saveEntryEdit(event) {
+  event.preventDefault();
+  const id = document.querySelector('#edit-entry-id').value;
+  const amount = Number(document.querySelector('#edit-entry-amount').value);
+  const occurredAt = document.querySelector('#edit-entry-date').value;
+  const note = document.querySelector('#edit-entry-note').value.trim();
+  const message = document.querySelector('#entry-edit-message');
+  if (!occurredAt || !Number.isFinite(amount) || amount <= 0 || !note) {
+    message.textContent = '請確認日期、金額與名稱都已填寫。';
+    return;
+  }
+  entries = entries.map(entry => entry.id === id ? {
+    ...entry,
+    occurredAt,
+    amount,
+    note,
+    category: document.querySelector('#edit-entry-category').value,
+    paymentAccount: document.querySelector('#edit-entry-account').value,
+    transactionKind: document.querySelector('#edit-entry-kind').value,
+    updatedAt: new Date().toISOString()
+  } : entry);
+  persist();
+  document.querySelector('#entry-edit-dialog').close();
+  renderRecent();
+  renderReport();
+  renderImportHistory();
+}
+
+async function deleteEntry(id) {
+  const entry = entries.find(candidate => candidate.id === id);
+  if (!entry || !confirm(`確定刪除「${entry.note}」${money(entry.amount)}嗎？刪除後只能用備份復原。`)) return;
+  stopSavedAudio();
+  if (entry.audioId) await audioDelete(entry.audioId).catch(() => {});
+  entries = entries.filter(candidate => candidate.id !== id);
+  persist();
+  document.querySelector('#entry-edit-dialog').close();
+  renderRecent();
+  renderReport();
+  renderImportHistory();
+}
+
+function runStableVersionMigration() {
+  const accountName = '中國信託活存帳戶';
+  if (!paymentAccounts.includes(accountName)) {
+    paymentAccounts.push(accountName);
+    localStorage.setItem(ACCOUNT_KEY, JSON.stringify(paymentAccounts));
+  }
+  if (localStorage.getItem(ELECTRIC_ACCOUNT_MIGRATION_KEY) === 'done') {
+    const migrated = entries.find(entry =>
+      Number(entry.amount) === 9372 &&
+      /電費|台電/.test(entry.note || '') &&
+      entry.paymentAccount === accountName
+    );
+    if (migrated) dataUpdateMessage = '台電9,372元已使用「中國信託活存帳戶」。';
+    return;
+  }
+
+  const alreadyUpdated = entries.find(entry =>
+    Number(entry.amount) === 9372 &&
+    /電費|台電/.test(entry.note || '') &&
+    entry.paymentAccount === accountName
+  );
+  if (alreadyUpdated) {
+    localStorage.setItem(ELECTRIC_ACCOUNT_MIGRATION_KEY, 'done');
+    dataUpdateMessage = '台電9,372元已使用「中國信託活存帳戶」。';
+    return;
+  }
+
+  const candidates = entries.filter(entry =>
+    Number(entry.amount) === 9372 &&
+    ['2026-07-27', '2026-07-28'].includes(entry.occurredAt) &&
+    /電費|台電/.test(entry.note || '') &&
+    entry.paymentAccount === '現金'
+  );
+  if (candidates.length === 1) {
+    entries = entries.map(entry => entry.id === candidates[0].id ? { ...entry, paymentAccount: accountName, updatedAt: new Date().toISOString() } : entry);
+    persist();
+    localStorage.setItem(ELECTRIC_ACCOUNT_MIGRATION_KEY, 'done');
+    dataUpdateMessage = '已將台電9,372元由「現金」改為「中國信託活存帳戶」。';
+  } else if (candidates.length > 1) {
+    dataUpdateMessage = '找到多筆9,372元電費，為避免改錯，請在下方明細按「修改」選擇正確一筆。';
+  } else {
+    dataUpdateMessage = '若台電9,372元尚未改好，請在下方明細按「修改」選擇中國信託活存帳戶。';
+  }
 }
 
 async function startOrStopRecording() {
@@ -605,12 +786,12 @@ async function saveEntry() {
 }
 
 function scheduleDeletion() {
-  const month = monthKey();
+  const month = reportMonthKey();
   const deleteAt = new Date(Date.now() + 7*86400000).toISOString();
   entries = entries.map(e => e.occurredAt.startsWith(month) && e.audio ? {...e, audioDeleteAfter: deleteAt} : e);
   persist(); renderReport();
 }
-function cancelDeletion() { const month=monthKey(); entries=entries.map(e=>e.occurredAt.startsWith(month)?{...e,audioDeleteAfter:null}:e); persist(); renderReport(); }
+function cancelDeletion() { const month=reportMonthKey(); entries=entries.map(e=>e.occurredAt.startsWith(month)?{...e,audioDeleteAfter:null}:e); persist(); renderReport(); }
 async function deleteDueAudio() {
   const now=new Date(), due=entries.filter(e=>e.audioDeleteAfter&&new Date(e.audioDeleteAfter)<=now);
   for(const entry of due) if(entry.audioId) await audioDelete(entry.audioId);
@@ -954,17 +1135,61 @@ async function extractImageText(file) {
 
 function importFingerprint(item) { return `${item.occurredAt}|${item.amount}|${item.note}|${item.paymentAccount}`; }
 
+function likelyDuplicate(item) {
+  return entries.some(entry => {
+    if (entry.occurredAt !== item.occurredAt || Number(entry.amount) !== Number(item.amount)) return false;
+    if ((entry.transactionKind || 'expense') !== (item.transactionKind || 'expense')) return false;
+    const sameUtility = item.category === '水電' && entry.category === '水電' && /電費|水費|瓦斯|電話費|網路費/.test(`${item.note} ${entry.note}`);
+    const left = String(entry.note || '').replace(/[\s\d年月日/.,，。－-]/g, '');
+    const right = String(item.note || '').replace(/[\s\d年月日/.,，。－-]/g, '');
+    const similarNote = left && right && (left.includes(right) || right.includes(left));
+    return sameUtility || similarNote;
+  });
+}
+
+function importAccountOptions(selected) {
+  const accounts = [...new Set([...paymentAccounts, selected].filter(Boolean))];
+  return accounts.map(account => `<option value="${escapeHtml(account)}" ${account === selected ? 'selected' : ''}>${escapeHtml(account)}</option>`).join('');
+}
+
 function renderImportPreview() {
   const target = document.querySelector('#import-preview');
   if (!pendingImports.length) { target.className = 'empty'; target.textContent = '沒有辨識到可匯入的交易，請改用清楚圖片、原始 PDF 或 CSV。'; document.querySelector('#confirm-import').hidden = true; return; }
   target.className = 'import-list';
-  target.innerHTML = pendingImports.map((item, index) => `<label class="import-item"><input type="checkbox" data-import-index="${index}" ${item.selected ? 'checked' : ''}><span>${escapeHtml(item.note)}<small>${item.occurredAt}・${escapeHtml(item.paymentAccount)}・${item.category}</small><span class="import-kind">${item.transactionKind === 'expense' ? '支出' : item.transactionKind === 'income' ? '收入／退款' : '轉帳（不計支出）'}</span></span><strong>${money(item.amount)}</strong></label>`).join('');
+  target.innerHTML = pendingImports.map((item, index) => `
+    <div class="import-item ${item.possibleDuplicate ? 'possible-duplicate' : ''}">
+      <input type="checkbox" data-import-index="${index}" aria-label="匯入${escapeHtml(item.note)}" ${item.selected ? 'checked' : ''}>
+      <div>
+        <strong>${escapeHtml(item.note)}</strong>
+        <small>${item.occurredAt}・${item.category}</small>
+        <span class="import-kind">${item.transactionKind === 'expense' ? '支出' : item.transactionKind === 'income' ? '收入／退款' : '轉帳（不計支出）'}</span>
+        ${item.possibleDuplicate ? '<span class="duplicate-warning">可能已經記過，預設不勾選</span>' : ''}
+        <label class="import-account-label" for="import-account-${index}">扣款帳戶</label>
+        <select class="select-input import-account-select" id="import-account-${index}" data-import-account-index="${index}">${importAccountOptions(item.paymentAccount)}</select>
+      </div>
+      <strong>${money(item.amount)}</strong>
+    </div>`).join('');
   document.querySelector('#confirm-import').hidden = false;
+}
+
+function renderImportHistory() {
+  const target = document.querySelector('#import-history');
+  const imported = entries
+    .filter(entry => entry.importedAt)
+    .sort((a, b) => String(b.importedAt).localeCompare(String(a.importedAt)) || String(b.occurredAt).localeCompare(String(a.occurredAt)));
+  if (!imported.length) {
+    target.className = 'empty';
+    target.textContent = '目前還沒有已匯入的交易。';
+    return;
+  }
+  target.className = 'import-history-list';
+  target.innerHTML = imported.map(entry => entryRowHtml(entry, true)).join('');
 }
 
 async function processStatementFile(file) {
   const status = document.querySelector('#import-status');
   const preview = document.querySelector('#import-preview');
+  pendingImportSource = file.name;
   preview.className = 'empty'; preview.textContent = `正在讀取：${file.name}`; status.textContent = '資料只在這台手機處理，不會上傳帳單。';
   try {
     let text;
@@ -984,6 +1209,10 @@ async function processStatementFile(file) {
     if (localCtbcAccount && parsedAsCtbc) {
       pendingImports = pendingImports.map(item => ({ ...item, paymentAccount: localCtbcAccount }));
     }
+    pendingImports = pendingImports.map(item => {
+      const possibleDuplicate = likelyDuplicate(item);
+      return { ...item, possibleDuplicate, selected: item.selected && !possibleDuplicate };
+    });
     status.textContent = detectedTaiPower && !pendingImports.length
       ? '已讀到台電帳單，但沒有同時辨識到金額與繳費／銷帳日期，因此沒有列為支出。請保留這兩個欄位後重試。'
       : `辨識完成：找到 ${pendingImports.length} 筆。請逐筆勾選後確認。`;
@@ -995,14 +1224,21 @@ async function processStatementFile(file) {
 
 function confirmImport() {
   document.querySelectorAll('[data-import-index]').forEach(box => { pendingImports[Number(box.dataset.importIndex)].selected = box.checked; });
+  document.querySelectorAll('[data-import-account-index]').forEach(select => {
+    pendingImports[Number(select.dataset.importAccountIndex)].paymentAccount = select.value;
+  });
   const existing = new Set(entries.map(importFingerprint));
   const selected = pendingImports.filter(item => item.selected);
   const fresh = selected.filter(item => !existing.has(importFingerprint(item)));
   const now = new Date().toISOString();
-  entries.unshift(...fresh.map(item => ({ ...item, id: crypto.randomUUID(), audio: false, audioId: null, transcript: '', importedAt: now, createdAt: now })));
-  persist(); renderRecent(); renderReport();
+  const batchId = crypto.randomUUID();
+  entries.unshift(...fresh.map(item => {
+    const { possibleDuplicate, selected: ignoredSelected, ...entry } = item;
+    return { ...entry, id: crypto.randomUUID(), audio: false, audioId: null, transcript: '', importedAt: now, importBatchId: batchId, importSource: pendingImportSource, createdAt: now };
+  }));
+  persist(); renderRecent(); renderReport(); renderImportHistory();
   document.querySelector('#import-status').textContent = `已匯入 ${fresh.length} 筆；重複或未勾選 ${pendingImports.length - fresh.length} 筆。`;
-  pendingImports = []; document.querySelector('#confirm-import').hidden = true;
+  pendingImports = []; pendingImportSource = ''; document.querySelector('#confirm-import').hidden = true;
 }
 
 async function deriveKey(password, salt, usage) {
@@ -1016,7 +1252,7 @@ async function exportBackup() {
   const key=await deriveKey(password,salt,['encrypt']);
   const audio={};
   for(const entry of entries){if(entry.audioId){const blob=await audioGet(entry.audioId);if(blob)audio[entry.audioId]=await blobToDataUrl(blob);}}
-  const payload=new TextEncoder().encode(JSON.stringify({version:4,createdAt:new Date().toISOString(),entries,audio,paymentAccounts,plannerItems}));
+  const payload=new TextEncoder().encode(JSON.stringify({version:5,createdAt:new Date().toISOString(),entries,audio,paymentAccounts,plannerItems}));
   const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,payload);
   const pack={format:'mama-ledger-backup',salt:b64(salt),iv:b64(iv),data:b64(new Uint8Array(encrypted))};
   const blob=new Blob([JSON.stringify(pack)],{type:'application/octet-stream'}), url=URL.createObjectURL(blob), a=document.createElement('a');
@@ -1042,7 +1278,9 @@ async function restoreBackup(file) {
     if (Array.isArray(restored.plannerItems)) {
       plannerItems=restored.plannerItems; persistPlanner(); renderPlanner();
     }
-    persist(); renderRecent(); renderReport(); showBackup('復原完成。');
+    localStorage.removeItem(ELECTRIC_ACCOUNT_MIGRATION_KEY);
+    runStableVersionMigration();
+    persist(); renderRecent(); renderReport(); renderImportHistory(); showBackup('復原完成。');
   } catch { showBackup('無法解密：密碼錯誤或檔案損壞。'); }
 }
 function b64(bytes){return btoa(String.fromCharCode(...bytes));}
@@ -1062,6 +1300,7 @@ document.addEventListener('click', event => {
   if(calendarDate){selectedPlannerDate=calendarDate.dataset.calendarDate;document.querySelector('#planner-message').textContent='';renderPlanner();}
   const plannerToggle=event.target.closest('[data-planner-toggle]'); if(plannerToggle) togglePlannerItem(plannerToggle.dataset.plannerToggle);
   const plannerDelete=event.target.closest('[data-planner-delete]'); if(plannerDelete) deletePlannerItem(plannerDelete.dataset.plannerDelete);
+  const editEntry=event.target.closest('[data-edit-entry]'); if(editEntry) openEntryEditor(editEntry.dataset.editEntry);
   const play=event.target.closest('[data-audio-id]');
   if(play && !play.disabled) playSavedAudio(play.dataset.audioId, play);
 });
@@ -1071,6 +1310,14 @@ document.querySelector('#smart-review').addEventListener('click', analyzeAndConf
 document.querySelector('#save-entry').addEventListener('click', saveEntry);
 document.querySelector('#confirm-report').addEventListener('click', () => confirm('確認報表正確，並排定7天後刪除原始音檔？') && scheduleDeletion());
 document.querySelector('#cancel-deletion').addEventListener('click', cancelDeletion);
+document.querySelector('#report-prev').addEventListener('click', () => changeReportMonth(-1));
+document.querySelector('#report-next').addEventListener('click', () => changeReportMonth(1));
+document.querySelector('#report-search').addEventListener('input', renderReport);
+document.querySelector('#report-kind-filter').addEventListener('change', renderReport);
+document.querySelector('#report-account-filter').addEventListener('change', renderReport);
+document.querySelector('#entry-edit-form').addEventListener('submit', saveEntryEdit);
+document.querySelector('#delete-entry').addEventListener('click', () => deleteEntry(document.querySelector('#edit-entry-id').value));
+document.querySelector('#cancel-entry-edit').addEventListener('click', () => document.querySelector('#entry-edit-dialog').close());
 document.querySelector('#export-backup').addEventListener('click', exportBackup);
 document.querySelector('#restore-file').addEventListener('change', e => e.target.files[0] && restoreBackup(e.target.files[0]));
 document.querySelector('#save-payment-accounts').addEventListener('click', savePaymentAccounts);
@@ -1112,4 +1359,6 @@ document.querySelector('#planner-title').addEventListener('keydown', event => {
 window.addEventListener('beforeinstallprompt', event=>{event.preventDefault();deferredInstall=event;document.querySelector('#install-button').hidden=false;});
 document.querySelector('#install-button').addEventListener('click',async()=>{if(deferredInstall){deferredInstall.prompt();deferredInstall=null;}else alert('iPhone請按Safari分享按鈕，再選「加入主畫面」。');});
 if('serviceWorker'in navigator) navigator.serviceWorker.register('./sw.js');
-deleteDueAudio().then(()=>{renderRecent();renderReport();}); renderCategories(); renderPaymentAccounts(); renderRecent(); renderPlanner(); updateStorageStatus();
+runStableVersionMigration();
+deleteDueAudio().then(()=>{renderRecent();renderReport();renderImportHistory();});
+renderCategories(); renderPaymentAccounts(); renderRecent(); renderReport(); renderImportHistory(); renderPlanner(); updateStorageStatus();
