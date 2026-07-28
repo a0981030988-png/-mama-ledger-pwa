@@ -259,7 +259,10 @@ function startSpeechRecognition() {
       document.querySelector('#transcript').value = `${finalTranscript}${interim}`.trim();
       status.textContent = '正在產生國語逐字稿；台語或口音請在錄完後修正。';
     };
-    speechRecognition.onerror = () => { status.textContent = '這次未能產生逐字稿；原音已照常保存，可手動輸入文字。'; };
+    speechRecognition.onerror = event => {
+      if (event.error === 'aborted') return;
+      status.textContent = '這次未能產生逐字稿；原音已照常保存，可手動輸入文字。';
+    };
     speechRecognition.start();
   } catch { status.textContent = '無法啟動自動逐字稿；原音仍會保存。'; }
 }
@@ -269,8 +272,11 @@ function stopSpeechRecognition() {
   speechRecognition = null;
   if (!recognition) { setAudioSessionType('playback'); return; }
   recognition.onend = () => setAudioSessionType('playback');
-  try { recognition.stop(); } catch { setAudioSessionType('playback'); }
-  window.setTimeout(() => setAudioSessionType('playback'), 400);
+  try { recognition.stop(); } catch {}
+  window.setTimeout(() => {
+    try { recognition.abort(); } catch {}
+    setAudioSessionType('playback');
+  }, 300);
 }
 
 function setAudioSessionType(type) {
@@ -288,18 +294,39 @@ async function playWithIOSAudioReset(player) {
   player.defaultMuted = false;
   player.muted = false;
   player.volume = 1;
-  await player.play();
-  if (!IS_IOS_WEBKIT) return;
-  await waitForAudio(160);
-  if (player.paused || player.ended) return;
+
+  if (!IS_IOS_WEBKIT) {
+    await player.play();
+    return;
+  }
+
+  // 部分 iPhone 會讓第一次 play() 的 Promise 永遠停在等待中。
+  // 第一次只用來喚醒 WebKit 音訊，不等待結果；稍後強制中止並重播。
+  try {
+    const firstAttempt = player.play();
+    firstAttempt?.catch(() => {});
+  } catch {}
+
+  await waitForAudio(350);
   player.pause();
   try { player.currentTime = 0; } catch {}
   setAudioSessionType('playback');
-  await waitForAudio(90);
+  await waitForAudio(120);
   player.defaultMuted = false;
   player.muted = false;
   player.volume = 1;
-  await player.play();
+
+  let finalError;
+  try {
+    const finalAttempt = player.play();
+    finalAttempt?.catch(error => { finalError = error; });
+  } catch (error) {
+    finalError = error;
+  }
+
+  // 第二次也不等待 Safari 的 Promise，直接依實際播放狀態判定。
+  await waitForAudio(300);
+  if (finalError || player.paused) throw finalError || new Error('playback did not start');
 }
 
 function speak(text) {
