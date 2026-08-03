@@ -4,6 +4,7 @@ const STORE_KEY = 'mama-ledger.entries.v1';
 const META_KEY = 'mama-ledger.meta.v1';
 const PLANNER_KEY = 'mama-ledger.planner.v1';
 const ELECTRIC_ACCOUNT_MIGRATION_KEY = 'mama-ledger.migration.electric-9372-account.v1';
+const CTBC_JUNE_2026_IMPORT_KEY = 'mama-ledger.import.ctbc-2026-06-screenshots.v1';
 let entries = safeParse(localStorage.getItem(STORE_KEY), []);
 if (!Array.isArray(entries)) entries = [];
 let meta = safeParse(localStorage.getItem(META_KEY), { lastBackupAt: null });
@@ -739,6 +740,144 @@ function runStableVersionMigration() {
   }
 }
 
+function statementImportMatchKey(item) {
+  const kind = item.transactionKind || 'expense';
+  if (kind === 'transfer') return `${kind}|${item.occurredAt}|${Number(item.amount)}`;
+  const note = String(item.note || '').replace(/\s+/g, '').replace(/[－—–-]/g, '-').toLowerCase();
+  return `${kind}|${item.occurredAt}|${Number(item.amount)}|${note}`;
+}
+
+function runCtbcJune2026Import() {
+  const requiredAccounts = ['中信foodpanda 5925', '中信商旅鈦金卡8294', '中信中油聯名卡9946', '中國信託活存帳戶'];
+  let accountsChanged = false;
+  requiredAccounts.forEach(account => {
+    if (!paymentAccounts.includes(account)) {
+      paymentAccounts.push(account);
+      accountsChanged = true;
+    }
+  });
+  if (accountsChanged) localStorage.setItem(ACCOUNT_KEY, JSON.stringify(paymentAccounts));
+  if (localStorage.getItem(CTBC_JUNE_2026_IMPORT_KEY) === 'done') return;
+
+  const account5925 = '中信foodpanda 5925';
+  const rawRows = [
+    ['2026-05-25', 'FP－賴家食堂', 287, '餐飲', account5925],
+    ['2026-05-27', 'foodpanda－E', 273, '餐飲', account5925],
+    ['2026-05-27', 'FP－厚實鍋物', 393, '餐飲', account5925],
+    ['2026-05-27', '街口電支－統一超商', 32, '日用品', account5925],
+    ['2026-05-28', 'foodpanda－E', 363, '餐飲', account5925],
+    ['2026-05-28', 'foodpanda－E', 373, '餐飲', account5925],
+    ['2026-05-28', '街口電支－統一超商', 69, '日用品', account5925],
+    ['2026-05-29', 'FP－合家蚵仔麵線', 287, '餐飲', account5925],
+    ['2026-05-29', 'FP－早安進行式 Go', 441, '餐飲', account5925],
+    ['2026-05-29', '街口電支－桃園市路邊停車', 70, '交通', account5925],
+    ['2026-05-30', 'FP－四海遊龍（桃園）', 617, '餐飲', account5925],
+    ['2026-05-30', '街口電支－清心福全（龍潭）', 186, '餐飲', account5925],
+    ['2026-06-03', 'FP－藍記精緻便當', 348, '餐飲', account5925],
+    ['2026-06-04', 'foodpanda－E', 541, '餐飲', account5925],
+    ['2026-06-04', 'FP－五代牧牛排（龍潭）', 349, '餐飲', account5925],
+    ['2026-06-04', '街口電支－桃園市路邊停車', 20, '交通', account5925],
+    ['2026-06-04', '街口電支－臺北市路邊停車', 29, '交通', account5925],
+    ['2026-06-05', '街口電支－全家便利商店', 316, '日用品', account5925],
+    ['2026-06-05', '優步－安心池上便當', 426, '餐飲', account5925],
+    ['2026-06-06', 'foodpanda－E', 511, '餐飲', account5925],
+    ['2026-06-07', 'FP－天下奇冰（龍潭）', 229, '餐飲', account5925],
+    ['2026-06-08', 'FP－莫寧早餐', 329, '餐飲', account5925],
+    ['2026-06-08', 'eTag臨停 CBE-3633', 40, '交通', account5925],
+    ['2026-06-08', 'eTag臨停 CBE-3633', 20, '交通', account5925],
+    ['2026-06-10', 'FP－梁社漢排骨（龍潭）', 427, '餐飲', account5925],
+    ['2026-06-12', 'foodpanda－E', 230, '餐飲', account5925],
+    ['2026-06-12', 'FP－麻將麻辣臭豆腐', 157, '餐飲', account5925],
+    ['2026-06-12', 'FP－賴家食堂', 282, '餐飲', account5925],
+    ['2026-06-13', 'FP－晨間廚房（龍潭）', 614, '餐飲', account5925],
+    ['2026-06-14', 'FP－尼好早午餐（龍潭）', 444, '餐飲', account5925],
+    ['2026-06-14', '優步－阿木師碳烤雞排', 505, '餐飲', account5925],
+    ['2026-06-15', 'FP－可口便當', 261, '餐飲', account5925],
+    ['2026-06-15', '街口電支－寶雅國際', 2889, '日用品', account5925],
+    ['2026-06-15', '優步－澄美早餐', 345, '餐飲', account5925],
+    ['2026-06-16', 'FP－晨間廚房（龍潭）', 618, '餐飲', account5925],
+    ['2026-06-17', '優步－少年地瓜球（龍潭）', 184, '餐飲', account5925],
+    ['2026-06-17', '優步－老黃家常牛肉拉麵', 561, '餐飲', account5925],
+    ['2026-06-18', 'foodpanda－E', 255, '餐飲', account5925],
+    ['2026-06-18', 'FP－晨間廚房（龍潭）', 310, '餐飲', account5925],
+    ['2026-06-18', '街口電支－清心福全（龍潭）', 185, '餐飲', account5925],
+    ['2026-06-18', 'FFT*PINDUODUO5（CNY 48.28）', 225, '日用品', account5925],
+    ['2026-06-18', '國外交易手續費', 3, '其他', account5925],
+    ['2026-06-18', 'FFT*PINDUODUO11（CNY 48.28）', 225, '日用品', account5925],
+    ['2026-06-18', '國外交易手續費', 3, '其他', account5925],
+    ['2026-06-18', 'FFT*PINDUODUO1（CNY 16.79）', 78, '日用品', account5925],
+    ['2026-06-18', '國外交易手續費', 1, '其他', account5925],
+    ['2026-06-18', 'FFT*PINDUODUO4（CNY 38.80）', 181, '日用品', account5925],
+    ['2026-06-18', '國外交易手續費', 3, '其他', account5925],
+    ['2026-06-18', 'FFT*PINDUODUO9（CNY 56.65）', 264, '日用品', account5925],
+    ['2026-06-18', '國外交易手續費', 4, '其他', account5925],
+    ['2026-06-20', '街口電支－統一超商', 9, '日用品', account5925],
+    ['2026-06-20', '街口電支－統一超商', 330, '日用品', account5925],
+    ['2026-06-20', 'eTag加值 CBE-3633', 400, '交通', account5925],
+    ['2026-06-20', 'FFT*PINDUODUO2（CNY 40.60）', 190, '日用品', account5925],
+    ['2026-06-20', '國外交易手續費', 3, '其他', account5925],
+    ['2026-06-20', 'FFT*PINDUODUO4（CNY 54.20）', 254, '日用品', account5925],
+    ['2026-06-20', '國外交易手續費', 4, '其他', account5925],
+    ['2026-06-21', 'FP－肯德基 KFC 炸雞', 1046, '餐飲', account5925],
+    ['2026-06-22', 'FP－店名待確認（Suki）', 696, '餐飲', account5925],
+    ['2026-06-22', '優步－澄美早餐', 314, '餐飲', account5925],
+    ['2026-06-23', 'foodpanda－E', 249, '餐飲', account5925],
+    ['2026-06-23', '街口電支－統一超商', 11, '日用品', account5925],
+    ['2026-06-18', '中油Pay－龍門加油站', 1600, '交通', '中信中油聯名卡9946'],
+    ['2026-01-12', '富邦產險單筆分期06/06', 3555, '其他', '中信商旅鈦金卡8294'],
+    ['2026-06-15', '中信信用卡帳單本行扣繳', 20739, '其他', '中國信託活存帳戶', 'transfer']
+  ];
+  const statementRows = rawRows.map(([occurredAt, note, amount, category, paymentAccount, transactionKind = 'expense'], index) => ({
+    occurredAt,
+    note,
+    amount,
+    category,
+    paymentAccount,
+    transactionKind,
+    statementMonth: '2026-06',
+    statementRow: index + 1
+  }));
+
+  const existingCounts = new Map();
+  entries.forEach(entry => {
+    const key = statementImportMatchKey(entry);
+    existingCounts.set(key, (existingCounts.get(key) || 0) + 1);
+  });
+  const matchedCounts = new Map();
+  const freshRows = statementRows.filter(row => {
+    const key = statementImportMatchKey(row);
+    const matched = matchedCounts.get(key) || 0;
+    const existing = existingCounts.get(key) || 0;
+    if (matched < existing) {
+      matchedCounts.set(key, matched + 1);
+      return false;
+    }
+    return true;
+  });
+
+  const now = new Date().toISOString();
+  const batchId = 'ctbc-2026-06-screenshots-v1';
+  entries.unshift(...freshRows.map(row => ({
+    ...row,
+    id: crypto.randomUUID(),
+    audio: false,
+    audioId: null,
+    transcript: '',
+    importedAt: now,
+    importBatchId: batchId,
+    importSource: '中信2026年6月帳單（10張截圖）',
+    createdAt: now
+  })));
+  persist();
+  localStorage.setItem(CTBC_JUNE_2026_IMPORT_KEY, 'done');
+
+  const addedExpenses = freshRows.filter(row => row.transactionKind === 'expense');
+  const expenseTotal = addedExpenses.reduce((sum, row) => sum + Number(row.amount), 0);
+  const addedTransfers = freshRows.filter(row => row.transactionKind === 'transfer').length;
+  const message = `中信2026年6月帳單共64筆支出、合計24,464元；本次新增${addedExpenses.length}筆支出${expenseTotal ? `、${money(expenseTotal)}` : ''}${addedTransfers ? `，另新增${addedTransfers}筆轉帳（不計支出）` : ''}。`;
+  dataUpdateMessage = `${dataUpdateMessage}${dataUpdateMessage ? ' ' : ''}${message}`;
+}
+
 async function startOrStopRecording() {
   const button = document.querySelector('#record-button');
   if (recorder?.state === 'recording') { stopSpeechRecognition(); recorder.stop(); return; }
@@ -1360,5 +1499,6 @@ window.addEventListener('beforeinstallprompt', event=>{event.preventDefault();de
 document.querySelector('#install-button').addEventListener('click',async()=>{if(deferredInstall){deferredInstall.prompt();deferredInstall=null;}else alert('iPhone請按Safari分享按鈕，再選「加入主畫面」。');});
 if('serviceWorker'in navigator) navigator.serviceWorker.register('./sw.js');
 runStableVersionMigration();
+runCtbcJune2026Import();
 deleteDueAudio().then(()=>{renderRecent();renderReport();renderImportHistory();});
 renderCategories(); renderPaymentAccounts(); renderRecent(); renderReport(); renderImportHistory(); renderPlanner(); updateStorageStatus();
